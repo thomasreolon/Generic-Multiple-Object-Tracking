@@ -28,6 +28,7 @@ from engine import train_one_epoch_mot
 from models import build_model
 
 
+
 def get_args_parser():
     parser = argparse.ArgumentParser('Deformable DETR Detector', add_help=False)
     parser.add_argument('--lr', default=2e-4, type=float)
@@ -35,7 +36,7 @@ def get_args_parser():
     parser.add_argument('--lr_backbone', default=2e-5, type=float)
     parser.add_argument('--lr_linear_proj_names', default=['reference_points', 'sampling_offsets',], type=str, nargs='+')
     parser.add_argument('--lr_linear_proj_mult', default=0.1, type=float)
-    parser.add_argument('--batch_size', default=2, type=int)
+    parser.add_argument('--batch_size', default=1, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
     parser.add_argument('--epochs', default=50, type=int)
     parser.add_argument('--lr_drop', default=40, type=int)
@@ -44,12 +45,12 @@ def get_args_parser():
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
 
-    parser.add_argument('--meta_arch', default='deformable_detr', type=str)
+    parser.add_argument('--meta_arch', default='motr', type=str)
 
     parser.add_argument('--sgd', action='store_true')
 
     # Variants of Deformable DETR
-    parser.add_argument('--with_box_refine', default=False, action='store_true')
+    parser.add_argument('--with_box_refine', default=True, action='store_true')
     parser.add_argument('--two_stage', default=False, action='store_true')
     parser.add_argument('--accurate_ratio', default=False, action='store_true')
 
@@ -97,7 +98,7 @@ def get_args_parser():
     parser.add_argument('--max_size', default=1333, type=int)
     parser.add_argument('--val_width', default=800, type=int)
     parser.add_argument('--filter_ignore', action='store_true')
-    parser.add_argument('--append_crowd', default=False, action='store_true')
+    parser.add_argument('--append_crowd', default=True, action='store_true')
 
     # * Segmentation
     parser.add_argument('--masks', action='store_true',
@@ -125,7 +126,7 @@ def get_args_parser():
     parser.add_argument('--focal_alpha', default=0.25, type=float)
 
     # dataset parameters
-    parser.add_argument('--dataset_file', default='coco')
+    parser.add_argument('--dataset_file', default='e2e_dance')
     parser.add_argument('--gt_file_train', type=str)
     parser.add_argument('--gt_file_val', type=str)
     parser.add_argument('--coco_path', default='/data/workspace/detectron2/datasets/coco/', type=str)
@@ -143,12 +144,12 @@ def get_args_parser():
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--vis', action='store_true')
     parser.add_argument('--num_workers', default=2, type=int)
-    parser.add_argument('--pretrained', default=None, help='resume from checkpoint')
+    parser.add_argument('--pretrained', default='/home/intern/Desktop/MOTRv2/data/r50_deformable_detr_plus_iterative_bbox_refinement-checkpoint.pth', help='resume from checkpoint')
     parser.add_argument('--cache_mode', default=False, action='store_true', help='whether to cache images on memory')
 
     # end-to-end mot settings.
-    parser.add_argument('--mot_path', default='/data/Dataset/mot', type=str)
-    parser.add_argument('--det_db', default='', type=str)
+    parser.add_argument('--mot_path', default='/home/intern/Desktop/datasets', type=str)
+    parser.add_argument('--det_db', default='/home/intern/Desktop/MOTRv2/data/det_db_motrv2.json', type=str)
     parser.add_argument('--input_video', default='figs/demo.mp4', type=str)
     parser.add_argument('--data_txt_path_train',
                         default='./datasets/data_path/detmot17.train', type=str,
@@ -158,24 +159,24 @@ def get_args_parser():
                         help="path to dataset txt split")
     parser.add_argument('--img_path', default='data/valid/JPEGImages/')
 
-    parser.add_argument('--query_interaction_layer', default='QIM', type=str,
+    parser.add_argument('--query_interaction_layer', default='QIMv2', type=str,
                         help="")
-    parser.add_argument('--sample_mode', type=str, default='fixed_interval')
-    parser.add_argument('--sample_interval', type=int, default=1)
+    parser.add_argument('--sample_mode', type=str, default='random_interval')
+    parser.add_argument('--sample_interval', type=int, default=10)
     parser.add_argument('--random_drop', type=float, default=0)
     parser.add_argument('--fp_ratio', type=float, default=0)
     parser.add_argument('--merger_dropout', type=float, default=0.1)
     parser.add_argument('--update_query_pos', action='store_true')
 
     parser.add_argument('--sampler_steps', type=int, nargs='*')
-    parser.add_argument('--sampler_lengths', type=int, nargs='*')
+    parser.add_argument('--sampler_lengths', type=int, nargs='*', default=[5])
     parser.add_argument('--exp_name', default='submit', type=str)
     parser.add_argument('--memory_bank_score_thresh', type=float, default=0.)
     parser.add_argument('--memory_bank_len', type=int, default=4)
     parser.add_argument('--memory_bank_type', type=str, default=None)
     parser.add_argument('--memory_bank_with_self_attn', action='store_true', default=False)
 
-    parser.add_argument('--use_checkpoint', action='store_true', default=False)
+    parser.add_argument('--use_checkpoint', action='store_true', default=True)
     parser.add_argument('--query_denoise', type=float, default=0.)
     return parser
 

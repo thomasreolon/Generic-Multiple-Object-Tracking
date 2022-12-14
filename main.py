@@ -45,7 +45,7 @@ def get_args_parser():
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
 
-    parser.add_argument('--meta_arch', default='motr', type=str)
+    parser.add_argument('--meta_arch', default='gmot', type=str)
 
     parser.add_argument('--sgd', action='store_true')
 
@@ -144,12 +144,12 @@ def get_args_parser():
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--vis', action='store_true')
     parser.add_argument('--num_workers', default=2, type=int)
-    parser.add_argument('--pretrained', default='/home/intern/Desktop/MOTRv2/data/r50_deformable_detr_plus_iterative_bbox_refinement-checkpoint.pth', help='resume from checkpoint')
+    parser.add_argument('--pretrained', default='/home/intern/Desktop/Generic-Multiple-Object-Tracking/data/r50_deformable_detr_plus_iterative_bbox_refinement-checkpoint.pth', help='resume from checkpoint')
     parser.add_argument('--cache_mode', default=False, action='store_true', help='whether to cache images on memory')
 
     # end-to-end mot settings.
     parser.add_argument('--mot_path', default='/home/intern/Desktop/datasets', type=str)
-    parser.add_argument('--det_db', default='/home/intern/Desktop/MOTRv2/data/det_db_motrv2.json', type=str)
+    parser.add_argument('--det_db', default=[None, '/home/intern/Desktop/Generic-Multiple-Object-Tracking/data/det_db_motrv2.json'][0], type=str)
     parser.add_argument('--input_video', default='figs/demo.mp4', type=str)
     parser.add_argument('--data_txt_path_train',
                         default='./datasets/data_path/detmot17.train', type=str,

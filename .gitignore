@@ -7,4 +7,5 @@ build/
 *.egg-info
 *.mp4
 
+.vscode
 data/

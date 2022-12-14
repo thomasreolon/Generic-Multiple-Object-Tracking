@@ -2,10 +2,10 @@ import torch
 from .revbifpn import BackboneRevbifpn
 
 
-def get_backbone(args):
+def build_backbone(args):
 
-    if args.nn_backbone == 'revbifpn':
-        net = BackboneRevbifpn(args.nn_initial_downsample, args.nn_n_feat_levels)
+    if True or args.nn_backbone == 'revbifpn':
+        net = BackboneRevbifpn(4, args.num_feature_levels)
     else:
         raise Exception(f'{args.nn_backbone} Not Implemented Yet')
 

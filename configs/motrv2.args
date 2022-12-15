@@ -1,4 +1,4 @@
---meta_arch gmot
+--meta_arch motr
 --dataset_file e2e_dance
 --epoch 5
 --with_box_refine

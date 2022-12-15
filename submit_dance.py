@@ -114,7 +114,7 @@ class Detector(object):
         total_dts = 0
         total_occlusion_dts = 0
 
-        if self.args.det_db:
+        if False and self.args.det_db:
             with open(os.path.join(self.args.mot_path, self.args.det_db)) as f:
                 det_db = json.load(f)
         else:

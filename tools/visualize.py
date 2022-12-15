@@ -56,16 +56,16 @@ def process(trk_path, img_list, output="output.mp4"):
 
 
 if __name__ == '__main__':
-    jobs = os.listdir("exps/motrv2_noqd/run1/tracker/")
+    jobs = os.listdir("/home/intern/Desktop/Generic-Multiple-Object-Tracking/exp/dance_pretrain")
     rank = int(os.environ.get('RLAUNCH_REPLICA', '0'))
     ws = int(os.environ.get('RLAUNCH_REPLICA_TOTAL', '1'))
     jobs = sorted(jobs)[rank::ws]
     for seq in jobs:
         print(seq)
 
-        trk_path = "exps/motrv2_noqd/run1/tracker/" + seq
+        trk_path = "/home/intern/Desktop/Generic-Multiple-Object-Tracking/exp/dance_pretrain" + seq
         # trk_path = "/data/Dataset/mot/DanceTrack/val/dancetrack0010/gt/gt.txt"
 
-        img_list = glob(f"/data/Dataset/mot/DanceTrack/val/{seq[:-4]}/img1/*.jpg")
+        img_list = glob(f"/home/intern/Desktop/datasets/DanceTrack/val/{seq[:-4]}/img1/*.jpg")
         process(trk_path, img_list, f'motr_trainval_demo/{seq[:-4]}.mp4')
         break

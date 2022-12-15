@@ -133,7 +133,7 @@ def get_args_parser():
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
 
-    parser.add_argument('--output_dir', default='',
+    parser.add_argument('--output_dir', default='.',
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
@@ -144,7 +144,7 @@ def get_args_parser():
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--vis', action='store_true')
     parser.add_argument('--num_workers', default=2, type=int)
-    parser.add_argument('--pretrained', default='/home/intern/Desktop/Generic-Multiple-Object-Tracking/data/r50_deformable_detr_plus_iterative_bbox_refinement-checkpoint.pth', help='resume from checkpoint')
+    parser.add_argument('--pretrained', default='/home/intern/Desktop/Generic-Multiple-Object-Tracking/data/motrv2_dancetrack.pth', help='resume from checkpoint')
     parser.add_argument('--cache_mode', default=False, action='store_true', help='whether to cache images on memory')
 
     # end-to-end mot settings.

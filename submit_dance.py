@@ -47,14 +47,18 @@ class ListImgDataset(Dataset):
         cur_img = cv2.cvtColor(cur_img, cv2.COLOR_BGR2RGB)
         proposals = []
         im_h, im_w = cur_img.shape[:2]
-        for line in self.det_db[f_path[:-4] + '.txt']:
-            l, t, w, h, s = list(map(float, line.split(',')))
-            proposals.append([(l + w / 2) / im_w,
-                                (t + h / 2) / im_h,
-                                w / im_w,
-                                h / im_h,
-                                s])
-        return cur_img, torch.as_tensor(proposals).reshape(-1, 5)
+        if self.det_db:
+            for line in self.det_db[f_path[:-4] + '.txt']:
+                l, t, w, h, s = list(map(float, line.split(',')))
+                proposals.append([(l + w / 2) / im_w,
+                                    (t + h / 2) / im_h,
+                                    w / im_w,
+                                    h / im_h,
+                                    s])
+            proposals = torch.tensor(proposals).reshape(-1, 5)
+        else:
+            proposals = torch.zeros(0,5)
+        return cur_img, proposals
 
     def init_img(self, img, proposals):
         ori_img = img.copy()
@@ -106,26 +110,24 @@ class Detector(object):
         keep = areas > area_threshold
         return dt_instances[keep]
 
-    def detect(self, prob_threshold=0.6, area_threshold=100, vis=False):
+    def detect(self, prob_threshold=0.6, area_threshold=100, vis=True):
         total_dts = 0
         total_occlusion_dts = 0
 
-        track_instances = None
-        with open(os.path.join(self.args.mot_path, self.args.det_db)) as f:
-            det_db = json.load(f)
+        if self.args.det_db:
+            with open(os.path.join(self.args.mot_path, self.args.det_db)) as f:
+                det_db = json.load(f)
+        else:
+            det_db = None
         loader = DataLoader(ListImgDataset(self.args.mot_path, self.img_list, det_db), 1, num_workers=2)
         lines = []
         for i, data in enumerate(tqdm(loader)):
             cur_img, ori_img, proposals = [d[0] for d in data]
             cur_img, proposals = cur_img.cuda(), proposals.cuda()
 
-            # track_instances = None
-            if track_instances is not None:
-                track_instances.remove('boxes')
-                track_instances.remove('labels')
             seq_h, seq_w, _ = ori_img.shape
 
-            res = self.detr.inference_single_image(cur_img, (seq_h, seq_w), track_instances, proposals)
+            res = self.detr.inference_single_image(cur_img, (seq_h, seq_w), None, proposals)
             track_instances = res['track_instances']
 
             dt_instances = deepcopy(track_instances)
@@ -140,12 +142,25 @@ class Detector(object):
             identities = dt_instances.obj_idxes.tolist()
 
             save_format = '{frame},{id},{x1:.2f},{y1:.2f},{w:.2f},{h:.2f},1,-1,-1,-1\n'
+            img=None
             for xyxy, track_id in zip(bbox_xyxy, identities):
                 if track_id < 0 or track_id is None:
                     continue
                 x1, y1, x2, y2 = xyxy
                 w, h = x2 - x1, y2 - y1
                 lines.append(save_format.format(frame=i + 1, id=track_id, x1=x1, y1=y1, w=w, h=h))
+
+                if vis:
+                    x1, y1, x2, y2 = [int(a) for a in xyxy]
+                    img = cur_img.clone().cpu()[0].permute(1,2,0).numpy()[:,:,::-1]
+                    tmp = img[ y1:y2, x1:x2].copy()
+                    img[y1-3:y2+3, x1-3:x2+3] = (0,2.3,0)
+                    img[y1:y2, x1:x2] = tmp
+            if img is not None:
+                cv2.imshow('preds', img/4+.4)
+                cv2.waitKey(40)
+            
+
         with open(os.path.join(self.predict_path, f'{self.seq_num}.txt'), 'w') as f:
             f.writelines(lines)
         print("totally {} dts {} occlusion dts".format(total_dts, total_occlusion_dts))

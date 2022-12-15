@@ -222,4 +222,4 @@ if __name__ == '__main__':
 
     for vid in vids:
         det = Detector(args, model=detr, vid=vid)
-        det.detect(args.score_threshold)
+        det.detect(args.score_threshold, vis=True)

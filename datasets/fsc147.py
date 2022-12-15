@@ -35,14 +35,12 @@ class FSCDataset(Dataset):
 """
 todo list:
 
-0) visualize results on MOT of pretrained MOT - gioMatt
-
 1) import GMOT - gioPome
 2) make BMN module - gioPome
 3) train MOTR-BMN on GMOT - venMatt
 4) visualize results - venSera
 
-
+5) implement MOTA/MOTH,IDF1
 
 
 

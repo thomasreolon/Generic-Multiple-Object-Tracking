@@ -19,8 +19,7 @@ import cv2
 import numpy as np
 import torch
 import torch.utils.data
-import os.path as osp
-from PIL import Image, ImageDraw
+from PIL import Image
 import copy
 import datasets.transforms as T
 from models.structures import Instances

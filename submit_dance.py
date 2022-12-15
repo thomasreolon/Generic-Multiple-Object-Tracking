@@ -41,13 +41,13 @@ class ListImgDataset(Dataset):
         self.mean = [0.485, 0.456, 0.406]
         self.std = [0.229, 0.224, 0.225]
 
-    def load_img_from_file(self, f_path):
+    def load_img_from_file(self, f_path, use_proposals=True):
         cur_img = cv2.imread(os.path.join(self.mot_path, f_path))
         assert cur_img is not None, f_path
         cur_img = cv2.cvtColor(cur_img, cv2.COLOR_BGR2RGB)
         proposals = []
         im_h, im_w = cur_img.shape[:2]
-        if self.det_db:
+        if use_proposals and self.det_db:
             for line in self.det_db[f_path[:-4] + '.txt']:
                 l, t, w, h, s = list(map(float, line.split(',')))
                 proposals.append([(l + w / 2) / im_w,
@@ -142,7 +142,7 @@ class Detector(object):
             identities = dt_instances.obj_idxes.tolist()
 
             save_format = '{frame},{id},{x1:.2f},{y1:.2f},{w:.2f},{h:.2f},1,-1,-1,-1\n'
-            img=None
+            img = cur_img.clone().cpu()[0].permute(1,2,0).numpy()[:,:,::-1]
             for xyxy, track_id in zip(bbox_xyxy, identities):
                 if track_id < 0 or track_id is None:
                     continue
@@ -151,12 +151,11 @@ class Detector(object):
                 lines.append(save_format.format(frame=i + 1, id=track_id, x1=x1, y1=y1, w=w, h=h))
 
                 if vis:
-                    x1, y1, x2, y2 = [int(a) for a in xyxy]
-                    img = cur_img.clone().cpu()[0].permute(1,2,0).numpy()[:,:,::-1]
+                    x1, y1, x2, y2 = [int(a*800/1080) for a in xyxy]
                     tmp = img[ y1:y2, x1:x2].copy()
                     img[y1-3:y2+3, x1-3:x2+3] = (0,2.3,0)
                     img[y1:y2, x1:x2] = tmp
-            if img is not None:
+            if vis:
                 cv2.imshow('preds', img/4+.4)
                 cv2.waitKey(40)
             

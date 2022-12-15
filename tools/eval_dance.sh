@@ -21,9 +21,9 @@ cp submit_dance.py $OUTPUT_DIR
 
 pushd $OUTPUT_DIR
 
-args=$(cat *.args)
+args=$(cat configs/*.args)
 # rlaunch --cpu 8 --gpu 1 --memory 24000 --positive-tags 2080ti -P 13 -- python3 submit_dance.py ${args} --resume checkpoint.pth --exp_name tracker
-cd .. ; python submit_dance.py ${args} --resume /home/intern/Desktop/Generic-Multiple-Object-Tracking/data/motrv2_dancetrack.pth --exp_name exp/dance_pre
+python submit_dance.py ${args} --resume /home/intern/Desktop/Generic-Multiple-Object-Tracking/data/motrv2_dancetrack.pth --exp_name exp/dance_pre
 
 popd
 

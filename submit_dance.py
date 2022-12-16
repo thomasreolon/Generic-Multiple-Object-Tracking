@@ -25,6 +25,7 @@ from main import get_args_parser
 from models.structures import Instances
 from torch.utils.data import Dataset, DataLoader
 
+device = 'cuda'
 
 class ListImgDataset(Dataset):
     def __init__(self, mot_path, img_list, det_db) -> None:
@@ -119,20 +120,16 @@ class Detector(object):
                 det_db = json.load(f)
         else:
             det_db = None
-
-        vid = '/home/intern/Desktop/datasets/GMOT/GenericMOT_JPEG_Sequence/stock-0/img1/'
-        CUSTOMGMOT = [vid, sorted(os.listdir(vid)),None]
-        DEFAULT = [self.args.mot_path, self.img_list, det_db]
         
-        loader = DataLoader(ListImgDataset(*CUSTOMGMOT), 1, num_workers=2)
+        loader = DataLoader(ListImgDataset(self.args.mot_path, self.img_list, det_db), 1, num_workers=2)
         lines = []
         for i, data in enumerate(tqdm(loader)):
             cur_img, ori_img, proposals = [d[0] for d in data]
-            cur_img, proposals = cur_img.cuda(), proposals.cuda()
+            cur_img, proposals = cur_img.to(device), proposals.to(device)
 
             seq_h, seq_w, _ = ori_img.shape
 
-            res = self.detr.inference_single_image(cur_img, (seq_h, seq_w), None, proposals)
+            res = self.detr.inference_single_image(cur_img, (seq_h, seq_w), None, proposals)  ####### track_instances is = None....   we arent'reusing queries from prev
             track_instances = res['track_instances']
 
             dt_instances = deepcopy(track_instances)
@@ -212,7 +209,7 @@ if __name__ == '__main__':
     checkpoint = torch.load(args.resume, map_location='cpu')
     detr = load_model(detr, args.resume)
     detr.eval()
-    detr = detr.cuda()
+    detr = detr.to(device)
 
     # '''for MOT17 submit''' 
     sub_dir = 'DanceTrack/test'
@@ -225,6 +222,8 @@ if __name__ == '__main__':
     ws = int(os.environ.get('RLAUNCH_REPLICA_TOTAL', '1'))
     vids = vids[rank::ws]
 
-    for vid in vids:
+    args.mot_path = '/home/intern/Desktop/datasets/GMOT/GenericMOT_JPEG_Sequence/'
+
+    for vid in ['boat-3', 'boat-3', 'stock-1', 'airplane-1']:#vids:
         det = Detector(args, model=detr, vid=vid)
         det.detect(args.score_threshold, vis=True)

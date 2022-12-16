@@ -31,6 +31,7 @@ from ..deformable_transformer_plus import build_deforamble_transformer, pos2pose
 from ..qim import build as build_query_interaction_layer
 from ..deformable_detr import SetCriterion, MLP, sigmoid_focal_loss
 
+from .exemplar.bmnlike import ImgExemplarSelfAttn
 
 class ClipMatcher(SetCriterion):
     def __init__(self, num_classes,
@@ -365,7 +366,7 @@ def _get_clones(module, N):
 
 
 class MyMOTR(nn.Module):
-    def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels, criterion, track_embed,
+    def __init__(self, backbone, transformer, q_estractor, num_classes, num_queries, num_feature_levels, criterion, track_embed,
                  aux_loss=True, with_box_refine=False, two_stage=False, memory_bank=None, use_checkpoint=False, query_denoise=0):
         """ Initializes the model.
         Parameters:
@@ -382,6 +383,7 @@ class MyMOTR(nn.Module):
         self.num_queries = num_queries
         self.track_embed = track_embed
         self.transformer = transformer
+        self.q_estractor = q_estractor
         hidden_dim = transformer.d_model
         self.num_classes = num_classes
         self.class_embed = nn.Linear(hidden_dim, num_classes)
@@ -392,6 +394,8 @@ class MyMOTR(nn.Module):
         self.position = nn.Embedding(num_queries, 4)
         self.yolox_embed = nn.Embedding(1, hidden_dim)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
+        with torch.no_grad(): # detection queries are = (BMN + these_embeddings) 
+            self.query_embed.weight.copy_(torch.rand_like(self.query_embed.weight)*1e-4) # ideally ==0
         if query_denoise:
             self.refine_embed = nn.Embedding(1, hidden_dim)
         if num_feature_levels > 1:
@@ -493,7 +497,7 @@ class MyMOTR(nn.Module):
         return [{'pred_logits': a, 'pred_boxes': b, }
                 for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
 
-    def _forward_single_image(self, samples, track_instances: Instances, gtboxes=None):
+    def _forward_single_image(self, samples, track_instances: Instances, gtboxes=None, exemplar=None):
         features, pos = self.backbone(samples)
         src, mask = features[-1].decompose()
         assert mask is not None
@@ -506,31 +510,43 @@ class MyMOTR(nn.Module):
             masks.append(mask)
             assert mask is not None
 
+        exemplar,_ = self.backbone(exemplar)
+        exemplar, _ = features[-1].decompose()
+        srcs[-1], queries = self.q_estractor(srcs[-1], exemplar)
+
         if self.num_feature_levels > len(srcs):
             _len_srcs = len(srcs)
             for l in range(_len_srcs, self.num_feature_levels):
                 if l == _len_srcs:
-                    src = self.input_proj[l](features[-1].tensors)
+                    src = self.input_proj[l](features[-1].tensors)      # CNN downsampling2
                 else:
                     src = self.input_proj[l](srcs[-1])
                 m = samples.mask
                 mask = F.interpolate(m[None].float(), size=src.shape[-2:]).to(torch.bool)[0]
-                pos_l = self.backbone[1](NestedTensor(src, mask)).to(src.dtype)
+                pos_l = self.backbone[1](NestedTensor(src, mask)).to(src.dtype) # gets position ?
                 srcs.append(src)
                 masks.append(mask)
                 pos.append(pos_l)
 
+        # sums to detection queries the infos from the frames
+        new_queries = track_instances.query_pos
+        new_queries = torch.cat([
+                (new_queries[:self.num_queries]+queries.squeeze(0))/2, 
+                new_queries[self.num_queries:]
+            ],dim=0
+        )
         if gtboxes is not None:
             n_dt = len(track_instances)
             ps_tgt = self.refine_embed.weight.expand(gtboxes.size(0), -1)
-            query_embed = torch.cat([track_instances.query_pos, ps_tgt])
+            query_embed = torch.cat([new_queries, ps_tgt])
             ref_pts = torch.cat([track_instances.ref_pts, gtboxes])
             attn_mask = torch.zeros((len(ref_pts), len(ref_pts)), dtype=bool, device=ref_pts.device)
             attn_mask[:n_dt, n_dt:] = True
         else:
-            query_embed = track_instances.query_pos
+            query_embed = new_queries
             ref_pts = track_instances.ref_pts
             attn_mask = None
+
 
         hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact = \
             self.transformer(srcs, masks, pos, query_embed, ref_pts=ref_pts,
@@ -664,11 +680,11 @@ class MyMOTR(nn.Module):
                     self._generate_empty_tracks(proposals),
                     track_instances])
 
-            if self.use_checkpoint and frame_index < len(frames) - 1:
+            if self.use_checkpoint and frame_index < len(frames) - 1:    # what does this do??
                 def fn(frame, gtboxes, *args):
-                    frame = nested_tensor_from_tensor_list([frame])
+                    frame = nested_tensor_from_tensor_list([frame])      
                     tmp = Instances((1, 1), **dict(zip(keys, args)))
-                    frame_res = self._forward_single_image(frame, tmp, gtboxes)
+                    frame_res = self._forward_single_image(frame, tmp, gtboxes) # tmp is made from [track_instances.get(k) for k in keys]
                     return (
                         frame_res['pred_logits'],
                         frame_res['pred_boxes'],
@@ -720,7 +736,7 @@ def build(args):
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
-
+    q_estractor = ImgExemplarSelfAttn(args.hidden_dim, args.num_queries)
     transformer = build_deforamble_transformer(args)
     d_model = transformer.d_model
     hidden_dim = args.dim_feedforward
@@ -755,6 +771,7 @@ def build(args):
     model = MyMOTR(
         backbone,
         transformer,
+        q_estractor,
         track_embed=query_interaction_layer,
         num_feature_levels=args.num_feature_levels,
         num_classes=num_classes,

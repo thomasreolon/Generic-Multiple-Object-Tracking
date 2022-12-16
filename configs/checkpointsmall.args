@@ -1,0 +1,19 @@
+--meta_arch motr
+--dataset_file e2e_gmot
+--num_feature_levels 4
+--sample_mode random_interval
+--num_queries 100
+--query_interaction_layer QIMv2
+--lr 4e-4
+--lr_backbone 8e-5
+--batch_size 1
+--sample_interval 6
+--sample_mode random_interval
+--sampler_lengths 5
+--merger_dropout 0
+--dropout 0
+--random_drop 0.1
+--fp_ratio 0.3
+--query_denoise 0.05
+--small_ds
+--use_checkpoint

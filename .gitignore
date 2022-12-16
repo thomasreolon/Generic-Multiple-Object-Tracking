@@ -10,3 +10,7 @@ build/
 .vscode
 data/
 exp
+
+submit
+resume.log
+tmp.args

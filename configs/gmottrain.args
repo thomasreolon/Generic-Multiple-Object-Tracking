@@ -1,14 +1,11 @@
 --meta_arch gmot
---dataset_file e2e_fscd
-
---num_feature_levels 4
+--dataset_file e2e_gmot
+--num_feature_levels 3
 --num_queries 100
 --query_interaction_layer QIMv2
-
 --epochs 50
 --lr_drop 20
 --with_box_refine
-
 --lr 1e-3
 --lr_backbone 8e-5
 --pretrained /home/intern/Desktop/Generic-Multiple-Object-Tracking/checkpointSmall.pth
@@ -22,3 +19,4 @@
 --fp_ratio 0.3
 --query_denoise 0.05
 --use_checkpoint
+--small_ds

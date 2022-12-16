@@ -32,16 +32,17 @@ class FSCDataset(Dataset):
 
 
 
+
+
+
 """
 todo list:
 
-1) import GMOT - gioPome
-2) make BMN module - gioPome
 3) train MOTR-BMN on GMOT - venMatt
 4) visualize results - venSera
 
 5) implement MOTA/MOTH,IDF1
-
+6) train 
 
 
 
@@ -51,7 +52,7 @@ todo list:
 
 
 
-
+"""
 
 def get_image_classes(class_file):
     class_dict = dict()
@@ -300,4 +301,4 @@ if __name__ == '__main__':
         print(patches.keys())
         print(targets.keys())
         break
-    
+    """

@@ -7,6 +7,7 @@ from PIL import Image
 from models.structures import Instances
 
 import torch
+import torchvision
 from torch.utils.data import Dataset
 import datasets.transforms as T
 
@@ -109,15 +110,30 @@ class GMOTDataset(Dataset):
             gt_instances_i = self._targets_to_instances(targets_i, img_i.shape[1:3])
             gt_instances.append(gt_instances_i)
 
+        exemplar = self.get_exemplar(images[0], targets[0])
+
         return {
             'imgs': images,
             'gt_instances': gt_instances,
             'proposals': [torch.zeros(0,5) for _ in range(len(images))],
-            'patches': [torch.ones(3,128,128)],
+            'patches': [exemplar],
         }
 
     def __len__(self):
         return len(self.indices)
+
+    def get_exemplar(self,img,target):
+        bb = target['boxes'][0].clone()
+        bb = (bb.view(2,2) * torch.tensor([img.shape[2],img.shape[1]]).view(1,2)).flatten()  # coords in img
+        bb = torch.cat((bb[:2]-bb[2:]/2, bb[:2]+bb[2:]/2)).int()               # x1y1x2y2
+        patch = img[:, bb[1]:bb[3], bb[0]:bb[2]]
+
+        # pad val
+        max_dim = torch.tensor([max(*patch.shape[1:])])
+        pad_size = 2**(int(torch.log2(max_dim).item()) +1)
+        paddings = ((pad_size-patch.shape[2])//2, (pad_size-patch.shape[1])//2, pad_size-patch.shape[2]-(pad_size-patch.shape[2])//2, pad_size-patch.shape[1]-(pad_size-patch.shape[1])//2)
+        return torchvision.transforms.functional.pad(patch, paddings)
+
 
     def _pre_single_frame(self, vid, idx):
         if (vid,idx) not in self._cache:

@@ -12,5 +12,5 @@ data/
 exp
 
 submit
-resume.log
+*.log
 tmp.args

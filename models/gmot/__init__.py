@@ -13,10 +13,9 @@ DETR model and criterion classes.
 """
 import copy
 import math
-import numpy as np
 import torch
 import torch.nn.functional as F
-from torch import nn, Tensor
+from torch import nn
 from typing import List
 
 from util import box_ops, checkpoint

@@ -37,7 +37,12 @@ class ImgExemplarSelfAttn(nn.Module):
         # get topk queries:
         similarity_w_exemplar = attn_matrix[:,:,-1]
         _, q_ids = similarity_w_exemplar.topk(150)       #TODO: avoid nearby pixels to be selected
-        queries = values[:,:,:-1].permute(0,2,1) [q_ids] #  Bx150xC
+
+
+        queries=[] # maybe there is a better way
+        for img, id in zip(values[:,:-1], q_ids):
+            queries.append(img[id])
+        queries = torch.stack(queries) #  Bx150xC
 
 
         # TODO: maybe subtract mask from attn
@@ -47,6 +52,17 @@ class ImgExemplarSelfAttn(nn.Module):
         new_img_feat.permute(0,2,1).view(B,C,H,W)       # or use RESHAPE??TODO
 
         return new_img_feat, queries
+
+
+if __name__ == '__main__':
+
+    img_feat, exe_feat = torch.rand(2,256,32,48), torch.rand(2,256)
+    net = ImgExemplarSelfAttn()
+
+    new_img_feat, queries = net(img_feat, exe_feat)
+
+    print(new_img_feat.shape, queries.shape)
+
 
 
 

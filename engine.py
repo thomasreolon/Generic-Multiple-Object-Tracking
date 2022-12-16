@@ -57,7 +57,7 @@ def train_one_epoch_mot(model: torch.nn.Module, criterion: torch.nn.Module,
 
         # concat = cv2.resize(concat, (400, 1300))
         # cv2.imshow('batch', concat/4+ .3) 
-        # cv2.waitKey()
+        # cv2.waitKey(50)
 
         data_dict = data_dict_to_cuda(data_dict, device)
         outputs = model(data_dict)

@@ -114,12 +114,17 @@ class Detector(object):
         total_dts = 0
         total_occlusion_dts = 0
 
-        if False and self.args.det_db:
+        if self.args.det_db and os.path.exists(self.args.det_db):
             with open(os.path.join(self.args.mot_path, self.args.det_db)) as f:
                 det_db = json.load(f)
         else:
             det_db = None
-        loader = DataLoader(ListImgDataset(self.args.mot_path, self.img_list, det_db), 1, num_workers=2)
+
+        vid = '/home/intern/Desktop/datasets/GMOT/GenericMOT_JPEG_Sequence/stock-0/img1/'
+        CUSTOMGMOT = [vid, sorted(os.listdir(vid)),None]
+        DEFAULT = [self.args.mot_path, self.img_list, det_db]
+        
+        loader = DataLoader(ListImgDataset(*CUSTOMGMOT), 1, num_workers=2)
         lines = []
         for i, data in enumerate(tqdm(loader)):
             cur_img, ori_img, proposals = [d[0] for d in data]

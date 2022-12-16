@@ -67,14 +67,13 @@ class GMOTDataset(Dataset):
         if split == 'test':
             videos = [v for v in videos if ('1' in v)]
 
-        ############################### just to test if its working
-        videos = videos[:1]
-
-        for v in videos:
-            txt_path = f'{dataset_path}/track_label/{v}.txt'
-            self.data[v] = load_labels(txt_path)
-
         for vid in videos:
+            txt_path = f'{dataset_path}/track_label/{vid}.txt'
+            self.data[vid] = load_labels(txt_path)
+
+            if self.args.small_ds:
+                self.data[vid] = {k:v for k,v in self.data[vid].items() if k<30}
+
             self.video_dict[vid] = len(self.video_dict)
             t_min = min(self.data[vid].keys())
             t_max = max(self.data[vid].keys()) + 1

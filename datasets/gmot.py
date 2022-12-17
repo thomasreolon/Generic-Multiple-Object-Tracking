@@ -36,7 +36,6 @@ class GMOTDataset(Dataset):
 
     def __init__(self, args, split='all', transform=None):
         self._cache = {}        # store precomputed inputs (images, patches, ...)
-        self.selected_video = 0 # if dataset is made of videos return samples just from the selected one (if dataset contains random images they are seen as a unique "video")
         self.args = args
         self.transform = transform
         self.num_frames_per_batch = max(args.sampler_lengths)

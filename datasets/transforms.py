@@ -334,9 +334,44 @@ class MotRandomShift(object):
         
         return ret_imgs, ret_targets
 
+class MotRandomShiftExtender(object):
+    def __init__(self, speed=1, num_outputs=5):
+        self.speed = speed
+        self.num_outputs = num_outputs
+
+    def __call__(self, imgs: list, targets: list):
+
+        prev_shift = (0,0)
+        for select_i in range(self.num_outputs):
+            w, h = imgs[select_i].size
+            bs = 1  # TODO: i think its always 1...
+
+            xshift = torch.randint(int(self.speed*50), (1,1)) 
+            xshift *= (torch.randn(bs) > 0.0).int() * 2 - 1
+            xshift += prev_shift[0] * (select_i+1)
+            xshift = (xshift / self.num_outputs).int().item()
+            yshift = torch.randint(int(self.speed*50), (1,1)) 
+            yshift *= (torch.randn(bs) > 0.0).int() * 2 - 1
+            yshift += prev_shift[1] * (select_i+1)
+            yshift = (yshift / self.num_outputs).int().item()
+            ymin = max(0, -yshift)
+            ymax = min(h, h - yshift)
+            xmin = max(0, -xshift)
+            xmax = min(w, w - xshift)
+
+            region = (int(ymin), int(xmin), int(ymax-ymin), int(xmax-xmin))
+            imgtarg = copy.deepcopy(imgs[0]), copy.deepcopy(targets[0])
+            new_img, new_targ = random_shift(*imgtarg, region, (h,w)) 
+            imgs.append(new_img)
+            targets.append(new_targ)
+        
+            prev_shift = (xshift,yshift)
+
+        return imgs, targets
+
 
 class FixedMotRandomShift(object):
-    def __init__(self, bs=1, padding=50):
+    def __init__(self, bs=1, padding=64):
         self.bs = bs
         self.padding = padding
 

@@ -1,4 +1,7 @@
 import os
+os.chdir('C:/Users/Thomas/Desktop/Generic-Multiple-Object-Tracking')
+import sys
+sys.path.append('C:/Users/Thomas/Desktop/Generic-Multiple-Object-Tracking')
 import random
 import pathlib
 from collections import defaultdict
@@ -131,6 +134,7 @@ class GMOTDataset(Dataset):
         # pad val
         max_dim = torch.tensor([max(*patch.shape[1:])])
         pad_size = 2**(int(torch.log2(max_dim).item()) +1)
+        pad_size = max(pad_size, 64)
         paddings = ((pad_size-patch.shape[2])//2, (pad_size-patch.shape[1])//2, pad_size-patch.shape[2]-(pad_size-patch.shape[2])//2, pad_size-patch.shape[1]-(pad_size-patch.shape[1])//2)
         return torchvision.transforms.functional.pad(patch, paddings)
 
@@ -244,4 +248,3 @@ def build(image_set, args):
     dataset = GMOTDataset(args, image_set, transform)
 
     return dataset
-

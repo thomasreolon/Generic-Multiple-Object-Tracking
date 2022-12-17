@@ -654,7 +654,7 @@ class MyMOTR(nn.Module):
         if self.training:
             self.criterion.initialize_for_single_clip(data['gt_instances'])
         frames = data['imgs']  # list of Tensor.
-        exemplar = data['patches'][0]
+        exemplar = data['patches'][0] if 'patches' in data else None
         outputs = {
             'pred_logits': [],
             'pred_boxes': [],
@@ -685,7 +685,7 @@ class MyMOTR(nn.Module):
                 def fn(frame, gtboxes, *args):
                     frame = nested_tensor_from_tensor_list([frame])      
                     tmp = Instances((1, 1), **dict(zip(keys, args)))
-                    frame_res = self._forward_single_image(frame, tmp, gtboxes) # tmp is made from [track_instances.get(k) for k in keys]
+                    frame_res = self._forward_single_image(frame, tmp, gtboxes, exemplar) # tmp is made from [track_instances.get(k) for k in keys]
                     return (
                         frame_res['pred_logits'],
                         frame_res['pred_boxes'],
@@ -708,7 +708,7 @@ class MyMOTR(nn.Module):
                 }
             else:
                 frame = nested_tensor_from_tensor_list([frame])
-                frame_res = self._forward_single_image(frame, track_instances, gtboxes)
+                frame_res = self._forward_single_image(frame, track_instances, gtboxes, exemplar)
             frame_res = self._post_process_single_image(frame_res, track_instances, is_last)
 
             track_instances = frame_res['track_instances']

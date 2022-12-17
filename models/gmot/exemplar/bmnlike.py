@@ -12,6 +12,8 @@ class ImgExemplarSelfAttn(nn.Module):
         self.similarity = nn.Parameter(torch.eye(emb_size), requires_grad=True)
         self.v = nn.Linear(emb_size, emb_size, bias=False)
 
+
+
     
     def forward(self, img_feat, exe_feat, mask=None):
         """ 
@@ -27,6 +29,7 @@ class ImgExemplarSelfAttn(nn.Module):
 
 
         #TODO: add pooling if exefeat is BChw
+        exe_feat = exe_feat.mean(dim=(2,3))
         exe_feat = exe_feat*1.2
 
         exe_feat = exe_feat.unsqueeze(2)            #  BxCx1

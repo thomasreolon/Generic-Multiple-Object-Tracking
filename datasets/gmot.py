@@ -1,7 +1,4 @@
 import os
-os.chdir('C:/Users/Thomas/Desktop/Generic-Multiple-Object-Tracking')
-import sys
-sys.path.append('C:/Users/Thomas/Desktop/Generic-Multiple-Object-Tracking')
 import random
 import pathlib
 from collections import defaultdict
@@ -13,6 +10,7 @@ import torch
 import torchvision
 from torch.utils.data import Dataset
 import datasets.transforms as T
+from util.misc import NestedTensor
 
 
 # load tracking labels (MOT format)
@@ -119,7 +117,7 @@ class GMOTDataset(Dataset):
             'imgs': images,
             'gt_instances': gt_instances,
             'proposals': [torch.zeros(0,5) for _ in range(len(images))],
-            'patches': [exemplar],
+            'patches': exemplar,
         }
 
     def __len__(self):
@@ -132,11 +130,14 @@ class GMOTDataset(Dataset):
         patch = img[:, bb[1]:bb[3], bb[0]:bb[2]]
 
         # pad val
-        max_dim = torch.tensor([max(*patch.shape[1:])])
+        max_dim = torch.tensor([max(*patch.shape[1:])],dtype=float)
         pad_size = 2**(int(torch.log2(max_dim).item()) +1)
         pad_size = max(pad_size, 64)
         paddings = ((pad_size-patch.shape[2])//2, (pad_size-patch.shape[1])//2, pad_size-patch.shape[2]-(pad_size-patch.shape[2])//2, pad_size-patch.shape[1]-(pad_size-patch.shape[1])//2)
-        return torchvision.transforms.functional.pad(patch, paddings)
+        img =  torchvision.transforms.functional.pad(patch, paddings)
+        mask = torch.ones((1,img.shape[1],img.shape[2]), dtype=torch.bool, device=img.device)
+        mask[:, paddings[1]:-paddings[3], paddings[0]:-paddings[2]] = False
+        return [img.unsqueeze(0), mask]
 
 
     def _pre_single_frame(self, vid, idx):

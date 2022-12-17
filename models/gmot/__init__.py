@@ -510,8 +510,13 @@ class MyMOTR(nn.Module):
             masks.append(mask)
             assert mask is not None
 
+        if isinstance(exemplar, torch.Tensor):
+            exemplar = nested_tensor_from_tensor_list([exemplar])
+        elif isinstance(exemplar, list):
+            exemplar = NestedTensor(*exemplar)
         exemplar,_ = self.backbone(exemplar)
         exemplar, _ = features[-1].decompose()
+        exemplar = self.input_proj[len(features)-1](exemplar)
         srcs[-1], queries = self.q_estractor(srcs[-1], exemplar)
 
         if self.num_feature_levels > len(srcs):
@@ -626,7 +631,7 @@ class MyMOTR(nn.Module):
         return frame_res
 
     @torch.no_grad()
-    def inference_single_image(self, img, ori_img_size, track_instances=None, proposals=None):
+    def inference_single_image(self, img, ori_img_size, track_instances=None, proposals=None, exemplar=None):
         if not isinstance(img, NestedTensor):
             img = nested_tensor_from_tensor_list(img)
         if track_instances is None:
@@ -636,7 +641,8 @@ class MyMOTR(nn.Module):
                 self._generate_empty_tracks(proposals),
                 track_instances])
         res = self._forward_single_image(img,
-                                         track_instances=track_instances)
+                                         track_instances=track_instances,
+                                         exemplar=exemplar)
         res = self._post_process_single_image(res, track_instances, False)
 
         track_instances = res['track_instances']
@@ -654,7 +660,7 @@ class MyMOTR(nn.Module):
         if self.training:
             self.criterion.initialize_for_single_clip(data['gt_instances'])
         frames = data['imgs']  # list of Tensor.
-        exemplar = data['patches'][0] if 'patches' in data else None
+        exemplar = data['patches'] if 'patches' in data else None
         outputs = {
             'pred_logits': [],
             'pred_boxes': [],

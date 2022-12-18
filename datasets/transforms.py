@@ -546,7 +546,7 @@ class MotRandomResize(RandomResize):
         size = random.choice(self.sizes)
 
         w,h =  imgs[0].size
-        if size*(w/h*size) > 864*1152: # if image is too big, use smaller size
+        if max(w,h)/min(w,h)*size**2 > 864*1052: # if image is too big, use smaller size
             size = self.sizes[0]
 
         ret_imgs = []

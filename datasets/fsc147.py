@@ -35,7 +35,7 @@ class FSCDataset(Dataset):
         path_ann = args.fscd_path+'/annotation_FSC147_384.json'
 
         self.detections = self.load_anns(json.load(open(path_ann, 'r')), json.load(open(path_det, 'r')))
-        self.detections = [d for d in self.detections  if d[0] in self.selected]
+        # self.detections = [d for d in self.detections  if d[0] in self.selected]
 
     def load_anns(self, d_exe, d_det):
         bbs = defaultdict(lambda: list())
@@ -154,13 +154,13 @@ def make_transforms_for_mot17(image_set, args=None):
         T.MotToTensor(),
         T.MotNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
-    scales = [608, 640, 672, 704, 736, 768, 800, 832, 864]
+    scales = [544, 608, 640, 672, 704, 736, 768, 800, 832, 864]
 
     if image_set == 'train':
         return T.MotCompose([
             T.MotRandomHorizontalFlip(),
             T.MotRandomShiftExtender(args.sample_interval,args.sampler_lengths[0]),
-            T.MotRandomResize(scales, max_size=1536),
+            T.MotRandomResize(scales, max_size=1376),
             T.MOTHSV(),
             normalize,
         ])

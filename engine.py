@@ -37,6 +37,8 @@ def train_one_epoch_mot(model: torch.nn.Module, criterion: torch.nn.Module,
 
     # for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
     for data_dict in metric_logger.log_every(data_loader, print_freq, header):
+        gc.collect()
+        torch.cuda.empty_cache()
 
         # # images are a sequence of 5 frames from the same video
         # import cv2, numpy as np
@@ -61,38 +63,41 @@ def train_one_epoch_mot(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
         data_dict = data_dict_to_cuda(data_dict, device)
-        outputs = model(data_dict)
+        try:
+            outputs = model(data_dict)
 
-        loss_dict = criterion(outputs, data_dict)
-        # print("iter {} after model".format(cnt-1))
-        weight_dict = criterion.weight_dict
-        losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+            loss_dict = criterion(outputs, data_dict)
+            # print("iter {} after model".format(cnt-1))
+            weight_dict = criterion.weight_dict
+            losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
-        # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
-        # loss_dict_reduced_unscaled = {f'{k}_unscaled': v
-        #                               for k, v in loss_dict_reduced.items()}
-        loss_dict_reduced_scaled = {k: v * weight_dict[k]
-                                    for k, v in loss_dict_reduced.items() if k in weight_dict}
-        losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
+            # reduce losses over all GPUs for logging purposes
+            loss_dict_reduced = utils.reduce_dict(loss_dict)
+            # loss_dict_reduced_unscaled = {f'{k}_unscaled': v
+            #                               for k, v in loss_dict_reduced.items()}
+            loss_dict_reduced_scaled = {k: v * weight_dict[k]
+                                        for k, v in loss_dict_reduced.items() if k in weight_dict}
+            losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
 
-        loss_value = losses_reduced_scaled.item()
+            loss_value = losses_reduced_scaled.item()
 
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-            print(loss_dict_reduced)
-            sys.exit(1)
+            if not math.isfinite(loss_value):
+                print("Loss is {}, stopping training".format(loss_value))
+                print(loss_dict_reduced)
+                sys.exit(1)
 
-        optimizer.zero_grad()
-        losses.backward()
+            optimizer.zero_grad()
+            losses.backward()
+        except RuntimeError as e:
+            del e
+            torch.cuda.empty_cache()
+            continue
         if max_norm > 0:
             grad_total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
         else:
             grad_total_norm = utils.get_total_grad_norm(model.parameters(), max_norm)
         optimizer.step()
 
-        gc.collect()
-        torch.cuda.empty_cache()
 
         # metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled)

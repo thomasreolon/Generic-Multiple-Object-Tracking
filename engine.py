@@ -37,6 +37,7 @@ def train_one_epoch_mot(model: torch.nn.Module, criterion: torch.nn.Module,
 
     # for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
     for data_dict in metric_logger.log_every(data_loader, print_freq, header):
+        print(data_dict['imgs'][0].shape)
 
         # # images are a sequence of 5 frames from the same video
         # import cv2, numpy as np

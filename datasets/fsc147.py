@@ -116,14 +116,17 @@ class FSCDataset(Dataset):
         }
 
 
-    def get_exemplar(self,img,target):
-        bb = target['boxes'][0].clone()
+    def get_exemplar(self,img,target, p=0):
+        bb = target['boxes'][p].clone()
         bb = (bb.view(2,2) * torch.tensor([img.shape[2],img.shape[1]]).view(1,2)).flatten()  # coords in img
         bb = torch.cat((bb[:2]-bb[2:]/2, bb[:2]+bb[2:]/2)).int()               # x1y1x2y2
+        bb = bb.clamp(min=0)
         patch = img[:, bb[1]:bb[3], bb[0]:bb[2]]
 
         # pad val
         max_dim = torch.tensor([max(*patch.shape[1:])],dtype=float)
+        if max_dim==0: ### escape in case of errors =,)
+            return self.get_exemplar(img, target, p+1)
         pad_size = 2**(int(torch.log2(max_dim).item()) +1)
         pad_size = max(pad_size, 64)
         paddings = ((pad_size-patch.shape[2])//2, (pad_size-patch.shape[1])//2, pad_size-patch.shape[2]-(pad_size-patch.shape[2])//2, pad_size-patch.shape[1]-(pad_size-patch.shape[1])//2)

@@ -56,8 +56,10 @@ class FSCDataset(Dataset):
         id2img = {imginfo['id']:imginfo['file_name']   for imginfo in d_det['images']}
 
         for boxinfo in d_det['annotations']:
-            if boxinfo['id'] not in id2img: continue
-            img_path = id2img[ boxinfo['id'] ]
+            if boxinfo['image_id'] not in id2img: 
+                print(boxinfo)
+                continue
+            img_path = id2img[ boxinfo['image_id'] ]
             bbs[img_path].append(boxinfo['bbox'])
         return list(bbs.items())
 
@@ -132,15 +134,15 @@ class FSCDataset(Dataset):
 
     def set_epoch(self, epoch):
         self.current_epoch = epoch
-        if self.sampler_steps is None or len(self.sampler_steps) == 0:
-            # fixed sampling length.
-            return
+        # if self.sampler_steps is None or len(self.sampler_steps) == 0:
+        #     # fixed sampling length.
+        #     return
 
-        for i in range(len(self.sampler_steps)):
-            if epoch >= self.sampler_steps[i]:
-                self.period_idx = i + 1
-        print("set epoch: epoch {} period_idx={}".format(epoch, self.period_idx))
-        self.num_frames_per_batch = self.lengths[self.period_idx]
+        # for i in range(len(self.sampler_steps)):
+        #     if epoch >= self.sampler_steps[i]:
+        #         self.period_idx = i + 1
+        # print("set epoch: epoch {} period_idx={}".format(epoch, self.period_idx))
+        # self.num_frames_per_batch = self.lengths[self.period_idx]
 
     def step_epoch(self):
         # one epoch finishes.
@@ -163,7 +165,7 @@ def make_transforms_for_mot17(image_set, args=None):
         T.MotToTensor(),
         T.MotNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
-    scales = [608, 640, 672, 704, 736, 768, 800, 832, 864, 896, 928, 960, 992]
+    scales = [608, 640, 672, 704, 736, 768, 800, 832, 864]
 
     if image_set == 'train':
         return T.MotCompose([
@@ -206,33 +208,33 @@ def build(image_set, args):
 
 if __name__=='__main__':
     from main import get_args_parser
+    import cv2, numpy as np
     args = get_args_parser().parse_args()
+    args.sampler_lengths[0] = 5
     ds = build('train', args)
 
-    for idx__ in [4,8,34,88]:
+    for idx__ in [434,846]:
         data_dict = ds[idx__]
 
-        import cv2, numpy as np
         imgs = data_dict['imgs']
-        concat = torch.cat(imgs, dim=1)
-        concat = np.ascontiguousarray(concat.clone().permute(1,2,0).numpy() [:,:,::-1])
-        # concat = (((concat * 0.22) + 0.5) * 255)
+        for concat, instances in zip(imgs, data_dict['gt_instances']):
+            concat = np.ascontiguousarray(concat.clone().permute(1,2,0).numpy() [:,:,::-1])
+            # concat = (((concat * 0.22) + 0.5) * 255)
 
-        for i in range(len(imgs)):
-            for box in data_dict['gt_instances'][i].boxes:
-                box = (box.view(2,2) * torch.tensor([imgs[0].shape[2], imgs[0].shape[1]]).view(1,2)).int()
-                x1,x2 = box[0,0] - box[1,0]//2, box[0,0] + box[1,0]//2
-                y1,y2 = box[0,1] - box[1,1]//2, box[0,1] + box[1,1]//2
-                y1, y2 = y1+imgs[0].shape[1]*i, y2+imgs[0].shape[1]*i
+            for box in instances.boxes:
+                box = (box.view(2,2) * torch.tensor([concat.shape[2-1], concat.shape[1-1]]).view(1,2))
+                x1,x2 = box[0,0] - box[1,0]/2, box[0,0] + box[1,0]/2
+                y1,y2 = box[0,1] - box[1,1]/2, box[0,1] + box[1,1]/2
+                x1,x2,y1,y2 = int(x1),int(x2),int(y1),int(y2)
                 tmp = concat[y1:y2, x1:x2].copy()
                 concat[y1-2:y2+2, x1-2:x2+2] = (0,0,1)
                 concat[y1:y2, x1:x2] = tmp
 
-        concat = cv2.resize(concat, (400, 1300))
-        cv2.imshow('batch', concat/4+ .3) 
-        cv2.waitKey()
+            concat = cv2.resize(concat, (540, 384))
+            cv2.imshow('batch', concat/4+ .3) 
+            cv2.waitKey()
 
         # problems: 
-        # solo 1 bb (print len in _pre...())
-        # crop is bad.. (read code)
         # motion model sucks... print(sxhifts..)
+
+        # rimuovi sys.append dalla prima riga

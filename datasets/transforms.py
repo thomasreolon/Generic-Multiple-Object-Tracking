@@ -114,6 +114,53 @@ def random_shift(image, target, region, sizes):
     return cropped_image, target
 
 
+def random_shift_noresize(image, target, region):
+    ow, oh = image.size
+    # step 1, shift crop and re-scale image firstly
+    shifted_image = F.crop(image, *region)
+
+    padding = [
+        ow - region[1]-region[3],  # left
+        oh - region[0]-region[2], # top
+        region[1], # right
+        region[0], # bott
+    ]
+    shifted_image = F.pad(shifted_image, padding)
+
+    target = target.copy()
+
+    # translations due to padding
+    j, i = padding[0]-padding[2], padding[1]-padding[3]
+
+    fields = ["labels", "scores", "iscrowd", "obj_ids"]
+
+    if "boxes" in target:
+        boxes = target["boxes"]
+        shifted_boxes = boxes + torch.as_tensor([j, i, j, i])
+        # shifted_boxes *= torch.as_tensor([ow / w, oh / h, ow / w, oh / h])
+        target["boxes"] = shifted_boxes.reshape(-1, 4)
+        fields.append("boxes")
+
+    # remove elements for which the boxes or masks that have zero area
+    if "boxes" in target or "masks" in target:
+        # favor boxes selection when defining which elements to keep
+        # this is compatible with previous implementation
+        if "boxes" in target:
+            shifted_boxes = target['boxes'].reshape(-1, 2, 2)
+            max_size = torch.as_tensor([ow, oh], dtype=torch.float32)
+            shifted_boxes = torch.min(shifted_boxes.reshape(-1, 2, 2), max_size)
+            shifted_boxes = shifted_boxes.clamp(min=0)
+            keep = torch.all(shifted_boxes[:, 1, :] > shifted_boxes[:, 0, :]+4, dim=1)
+        else:
+            keep = target['masks'].flatten(1).any(1)
+
+        for field in fields:
+            n_size = len(target[field])
+            target[field] = target[field][keep[:n_size]]
+
+    return shifted_image, target
+
+
 def crop(image, target, region):
     cropped_image = F.crop(image, *region)
 
@@ -341,19 +388,24 @@ class MotRandomShiftExtender(object):
 
     def __call__(self, imgs: list, targets: list):
 
-        prev_shift = (0,0)
+        prev_shift = (torch.rand(2)-.52) * self.speed
+        prev_shift += torch.sign(prev_shift)*self.speed/3
         for select_i in range(self.num_outputs):
             w, h = imgs[select_i].size
-            bs = 1  # TODO: i think its always 1...
 
-            xshift = torch.randint(int(self.speed*50), (1,1)) 
-            xshift *= (torch.randn(bs) > 0.0).int() * 2 - 1
-            xshift += prev_shift[0] * (select_i+1)
-            xshift = (xshift / self.num_outputs).int().item()
-            yshift = torch.randint(int(self.speed*50), (1,1)) 
-            yshift *= (torch.randn(bs) > 0.0).int() * 2 - 1
-            yshift += prev_shift[1] * (select_i+1)
-            yshift = (yshift / self.num_outputs).int().item()
+            shift = torch.randn(2) * self.speed
+            shift = prev_shift*(1+.5/(select_i+1)) + shift*.5
+            xshift, yshift = shift.int().tolist()
+
+            # if too much shift, invert
+            if abs(xshift) > w/2:
+                prev_shift[0] =  (w-8)/2 /(1+.45/(select_i+2))
+                xshift = (w-8)//2
+            if abs(yshift) > h/2:
+                prev_shift[1] = (h-8)/2 /(1+.45/(select_i+2))
+                yshift = (h-8)//2
+
+
             ymin = max(0, -yshift)
             ymax = min(h, h - yshift)
             xmin = max(0, -xshift)
@@ -361,11 +413,11 @@ class MotRandomShiftExtender(object):
 
             region = (int(ymin), int(xmin), int(ymax-ymin), int(xmax-xmin))
             imgtarg = copy.deepcopy(imgs[0]), copy.deepcopy(targets[0])
-            new_img, new_targ = random_shift(*imgtarg, region, (h,w)) 
+            new_img, new_targ = random_shift_noresize(*imgtarg, region) 
             imgs.append(new_img)
             targets.append(new_targ)
-        
-            prev_shift = (xshift,yshift)
+                    
+            prev_shift = shift
 
         return imgs, targets
 

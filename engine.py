@@ -13,7 +13,7 @@
 Train and eval functions used in main.py
 """
 import math
-import os
+import gc
 import sys
 from typing import Iterable
 
@@ -90,6 +90,9 @@ def train_one_epoch_mot(model: torch.nn.Module, criterion: torch.nn.Module,
         else:
             grad_total_norm = utils.get_total_grad_norm(model.parameters(), max_norm)
         optimizer.step()
+
+        gc.collect()
+        torch.cuda.empty_cache()
 
         # metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled)

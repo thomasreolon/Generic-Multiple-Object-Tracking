@@ -737,6 +737,7 @@ def build(args):
         'e2e_joint': 1,
         'e2e_static_mot': 1,
         'e2e_gmot': 1,
+        'e2e_fscd': 1,
     }
     assert args.dataset_file in dataset_to_num_classes
     num_classes = dataset_to_num_classes[args.dataset_file]

@@ -40,7 +40,7 @@ class SmoothedValue(object):
             fmt = "{median:.4f} ({global_avg:.4f})"
         self.deque = deque(maxlen=window_size)
         self.total = 0.0
-        self.count = 0
+        self.count = 0.0001
         self.fmt = fmt
 
     def update(self, value, n=1):
@@ -347,6 +347,9 @@ class NestedTensor(object):
 
     def decompose(self):
         return self.tensors, self.mask
+
+    def clone(self):
+        return NestedTensor(self.tensors.clone(), self.mask.clone())
 
     def __repr__(self):
         return str(self.tensors)

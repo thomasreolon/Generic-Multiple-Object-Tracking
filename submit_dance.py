@@ -24,6 +24,8 @@ from main import get_args_parser
 
 from models.structures import Instances
 from torch.utils.data import Dataset, DataLoader
+from datasets.fsc147 import build as build_dataset
+from util.misc import NestedTensor
 
 device = 'cuda'
 
@@ -81,6 +83,45 @@ class ListImgDataset(Dataset):
         img, proposals = self.load_img_from_file(self.img_list[index])
         return self.init_img(img, proposals)
 
+class FSCDDataset(Dataset):
+    def __init__(self, args, vid=8) -> None:
+        super().__init__()
+        args.sampler_lengths[0] = 100
+        self.ds = build_dataset('val', args)
+
+        self._select(vid)
+
+        self.img_height = 736
+        self.img_width = 1312
+
+    def _select(self, vid):
+        data = self.ds[vid]
+        self.images = [img.clone().permute(1,2,0).numpy() for img in data['imgs']]
+        self.exemplar = data['patches']
+
+
+    def init_img(self, img):
+        ori_img = img.copy()
+        ori_img = ori_img/4+.4 # de_normalize
+        self.seq_h, self.seq_w = img.shape[:2]
+        scale = self.img_height / min(self.seq_h, self.seq_w)
+        if max(self.seq_h, self.seq_w) * scale > self.img_width:
+            scale = self.img_width / max(self.seq_h, self.seq_w)
+        target_h = int(self.seq_h * scale)
+        target_w = int(self.seq_w * scale)
+        img = cv2.resize(img, (target_w, target_h))
+        img = torch.from_numpy(img).permute(2,0,1).unsqueeze(0).contiguous()
+        return img, ori_img
+
+    def __len__(self):
+        return len(self.images)
+    
+    def __getitem__(self, index):
+        img = self.images[index]
+        img, ori_img = self.init_img(img)
+        exemplar = self.exemplar[0].clone(), self.exemplar[1].clone()
+        return img, ori_img, exemplar
+
 
 class Detector(object):
     def __init__(self, args, model, vid):
@@ -88,15 +129,15 @@ class Detector(object):
         self.detr = model
 
         self.vid = vid
-        self.seq_num = os.path.basename(vid)
-        img_list = os.listdir(os.path.join(self.args.mot_path, vid, 'img1'))
-        img_list = [os.path.join(vid, 'img1', i) for i in img_list if 'jpg' in i]
+        # self.seq_num = os.path.basename(vid)
+        # img_list = os.listdir(os.path.join(self.args.mot_path, vid, 'img1'))
+        # img_list = [os.path.join(vid, 'img1', i) for i in img_list if 'jpg' in i]
 
-        self.img_list = sorted(img_list)
-        self.img_len = len(self.img_list)
+        # self.img_list = sorted(img_list)
+        # self.img_len = len(self.img_list)
 
-        self.predict_path = os.path.join(self.args.output_dir, args.exp_name)
-        os.makedirs(self.predict_path, exist_ok=True)
+        # self.predict_path = os.path.join(self.args.output_dir, args.exp_name)
+        # os.makedirs(self.predict_path, exist_ok=True)
 
     @staticmethod
     def filter_dt_by_score(dt_instances: Instances, prob_threshold: float) -> Instances:
@@ -111,7 +152,7 @@ class Detector(object):
         keep = areas > area_threshold
         return dt_instances[keep]
 
-    def detect(self, prob_threshold=0.6, area_threshold=100, vis=True):
+    def detect(self, prob_threshold=0.08, area_threshold=30, vis=True):
         total_dts = 0
         total_occlusion_dts = 0
 
@@ -121,15 +162,19 @@ class Detector(object):
         else:
             det_db = None
         
-        loader = DataLoader(ListImgDataset(self.args.mot_path, self.img_list, det_db), 1, num_workers=2)
+        # loader = DataLoader(ListImgDataset(self.args.mot_path, self.img_list, det_db), 1, num_workers=2)
+        loader = DataLoader(FSCDDataset(self.args, self.vid), 1, num_workers=2)  # TODO: initialize dataset img_list in Detection.__init__ (instead of dataset)
+       
         lines = []
         for i, data in enumerate(tqdm(loader)):
-            cur_img, ori_img, proposals = [d[0] for d in data]
+            cur_img, ori_img, proposals = data[0][0], data[1][0], data[2]
+
+            proposals = NestedTensor(proposals[0][0], proposals[1][0])
             cur_img, proposals = cur_img.to(device), proposals.to(device)
 
             seq_h, seq_w, _ = ori_img.shape
 
-            res = self.detr.inference_single_image(cur_img, (seq_h, seq_w), None, proposals)  ####### track_instances is = None....   we arent'reusing queries from prev
+            res = self.detr.inference_single_image(cur_img, (seq_h, seq_w), None, None, exemplar=proposals)  ####### track_instances is = None....   we arent'reusing queries from prev
             track_instances = res['track_instances']
 
             dt_instances = deepcopy(track_instances)
@@ -162,8 +207,8 @@ class Detector(object):
                 cv2.waitKey(40)
             
 
-        with open(os.path.join(self.predict_path, f'{self.seq_num}.txt'), 'w') as f:
-            f.writelines(lines)
+        # with open(os.path.join(self.predict_path, f'{self.seq_num}.txt'), 'w') as f:
+        #     f.writelines(lines)
         print("totally {} dts {} occlusion dts".format(total_dts, total_occlusion_dts))
 
 class RuntimeTrackerBase(object):
@@ -211,12 +256,19 @@ if __name__ == '__main__':
     detr.eval()
     detr = detr.to(device)
 
-    # '''for MOT17 submit''' 
-    sub_dir = 'DanceTrack/test'
-    seq_nums = os.listdir(os.path.join(args.mot_path, sub_dir))
-    if 'seqmap' in seq_nums:
-        seq_nums.remove('seqmap')
-    vids = [os.path.join(sub_dir, seq) for seq in seq_nums]
+    # # '''for MOT17 submit''' 
+    # sub_dir = 'DanceTrack/test'
+    # seq_nums = os.listdir(os.path.join(args.mot_path, sub_dir))
+    # if 'seqmap' in seq_nums:
+    #     seq_nums.remove('seqmap')
+    # vids = [os.path.join(sub_dir, seq) for seq in seq_nums]
+
+    # # '''for GMOT''' 
+    vids = ['boat-3', 'boat-3', 'stock-1', 'airplane-1']
+
+    # # '''for FSCD147''' 
+    vids = [1,5,9]
+
 
     rank = int(os.environ.get('RLAUNCH_REPLICA', '0'))
     ws = int(os.environ.get('RLAUNCH_REPLICA_TOTAL', '1'))
@@ -224,6 +276,6 @@ if __name__ == '__main__':
 
     args.mot_path = '/home/intern/Desktop/datasets/GMOT/GenericMOT_JPEG_Sequence/'
 
-    for vid in ['boat-3', 'boat-3', 'stock-1', 'airplane-1']:#vids:
+    for vid in vids:#vids:
         det = Detector(args, model=detr, vid=vid)
         det.detect(args.score_threshold, vis=True)

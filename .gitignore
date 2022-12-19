@@ -14,3 +14,6 @@ exp
 submit
 *.log
 tmp.args
+*.tmp
+desc
+git_*

@@ -33,6 +33,49 @@ from ..deformable_detr import SetCriterion, MLP, sigmoid_focal_loss
 
 from .exemplar.bmnlike import ImgExemplarSelfAttn
 
+class DeformConv(nn.Module):
+    def __init__(self, chi, cho):
+        super(DeformConv, self).__init__()
+        self.actf = nn.Sequential(
+            nn.BatchNorm2d(cho, momentum=0.1),
+            nn.ReLU(inplace=True)
+        )
+        # self.conv = DCN(chi, cho, kernel_size=(3, 3), stride=1, padding=1, dilation=1, deformable_groups=1)
+        self.conv = torch.nn.Conv2d(chi, cho, kernel_size=(3, 3), stride=1, padding=1, dilation=1)
+    @torch.cuda.amp.autocast()
+    def forward(self, x):
+        x_out = self.conv(x)
+        # print("1", x.dtype)
+        x_out = self.actf(x_out.type(x.dtype))
+        # print("2", x.dtype)
+        return x_out
+
+class IDAUpV3_bis(nn.Module):
+    # bilinear upsampling version of IDA
+    def __init__(self, o, channels, node_type=(DeformConv, DeformConv)):
+        super(IDAUpV3_bis, self).__init__()
+        self.up = nn.UpsamplingBilinear2d(scale_factor=2)  # no params
+
+        for i in range(0, len(channels)):
+            c = channels[i]
+            if i == 0:
+                node = node_type[1](c, o)
+            else:
+                node = node_type[1](c, c)
+            setattr(self, 'node_' + str(i), node)
+
+    def forward(self, layers, startp, endp):
+        for i in range(endp-1, startp, -1):
+            # print(f"layers[{i}] before:", layers[i].shape)
+            tmp = self.up(layers[i])  # ch 256-> 256
+            node = getattr(self, 'node_' + str(i))
+            layers[i-1] = node(tmp + layers[i - 1])
+        # layers[startp] = self.up(layers[startp])  # 256=>256
+        node = getattr(self, 'node_' + str(startp))
+        layers[startp] = node(layers[startp])
+        return layers # [layers[startp]]  #keeps multiscsales
+
+
 class ClipMatcher(SetCriterion):
     def __init__(self, num_classes,
                         matcher,
@@ -366,7 +409,7 @@ def _get_clones(module, N):
 
 
 class MyMOTR(nn.Module):
-    def __init__(self, backbone, transformer, q_estractor, num_classes, num_queries, num_feature_levels, criterion, track_embed,
+    def __init__(self, backbone, transformer, q_extractor, num_classes, num_queries, num_feature_levels, criterion, track_embed,
                  aux_loss=True, with_box_refine=False, two_stage=False, memory_bank=None, use_checkpoint=False, query_denoise=0):
         """ Initializes the model.
         Parameters:
@@ -383,7 +426,7 @@ class MyMOTR(nn.Module):
         self.num_queries = num_queries
         self.track_embed = track_embed
         self.transformer = transformer
-        self.q_estractor = q_estractor
+        self.q_extractor = q_extractor
         hidden_dim = transformer.d_model
         self.num_classes = num_classes
         self.class_embed = nn.Linear(hidden_dim, num_classes)
@@ -424,6 +467,8 @@ class MyMOTR(nn.Module):
         self.aux_loss = aux_loss
         self.with_box_refine = with_box_refine
         self.two_stage = two_stage
+
+        self.idaup = IDAUpV3_bis(256, [256 for _ in range(num_feature_levels)])
 
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
@@ -514,10 +559,15 @@ class MyMOTR(nn.Module):
             exemplar = nested_tensor_from_tensor_list([exemplar])
         elif isinstance(exemplar, list):
             exemplar = NestedTensor(*exemplar)
+
+        ## BMN PART
         exemplar,_ = self.backbone(exemplar)
         exemplar, _ = features[-1].decompose()
         exemplar = self.input_proj[len(features)-1](exemplar)
-        srcs[-1], queries = self.q_estractor(srcs[-1], exemplar)
+        srcs[-1], queries = self.q_extractor(srcs[-1], exemplar)
+
+        ## UPSCALE PART
+        srcs = self.idaup(srcs, 0, len(srcs))
 
         if self.num_feature_levels > len(srcs):
             _len_srcs = len(srcs)
@@ -715,15 +765,49 @@ class MyMOTR(nn.Module):
             else:
                 frame = nested_tensor_from_tensor_list([frame])
                 frame_res = self._forward_single_image(frame, track_instances, gtboxes, exemplar)
-            frame_res = self._post_process_single_image(frame_res, track_instances, is_last)
+
+            frame_res = self._post_process_single_image(frame_res, track_instances, False) #is_last)
 
             track_instances = frame_res['track_instances']
             outputs['pred_logits'].append(frame_res['pred_logits'])
             outputs['pred_boxes'].append(frame_res['pred_boxes'])
 
-        if not self.training:
-            outputs['track_instances'] = track_instances
-        else:
+            if True:     # if true will show detections for each image (debugging)
+                import cv2
+                dt_instances = self.post_process(track_instances, data['imgs'][0].shape[-2:])
+
+                keep = dt_instances.scores > .02
+                keep &= dt_instances.obj_idxes >= 0
+                dt_instances = dt_instances[keep]
+
+                wh = dt_instances.boxes[:, 2:4] - dt_instances.boxes[:, 0:2]
+                areas = wh[:, 0] * wh[:, 1]
+                keep = areas > 100
+                dt_instances = dt_instances[keep]
+
+                if len(dt_instances)==0:
+                    print('nothing found')
+                else:
+                    print('ok')
+                    bbox_xyxy = dt_instances.boxes.tolist()
+                    identities = dt_instances.obj_idxes.tolist()
+
+                    img = data['imgs'][frame_index].clone().cpu().permute(1,2,0).numpy()[:,:,::-1]
+                    for xyxy, track_id in zip(bbox_xyxy, identities):
+                        if track_id < 0 or track_id is None:
+                            continue
+                        x1, y1, x2, y2 = [int(a) for a in xyxy]
+                        color = tuple([(((5+track_id*3)*4909 % p)%256) /110 for p in (3001, 1109, 2027)])
+
+                        tmp = img[ y1:y2, x1:x2].copy()
+                        img[y1-3:y2+3, x1-3:x2+3] = color
+                        img[y1:y2, x1:x2] = tmp
+                    cv2.imshow('preds', img/4+.4)
+                    cv2.waitKey()
+
+
+        outputs['track_instances'] = track_instances
+        if self.training:
             outputs['losses_dict'] = self.criterion.losses_dict
         return outputs
 
@@ -744,7 +828,7 @@ def build(args):
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
-    q_estractor = ImgExemplarSelfAttn(args.hidden_dim, args.num_queries)
+    q_extractor = ImgExemplarSelfAttn(args.hidden_dim, args.num_queries)
     transformer = build_deforamble_transformer(args)
     d_model = transformer.d_model
     hidden_dim = args.dim_feedforward
@@ -779,7 +863,7 @@ def build(args):
     model = MyMOTR(
         backbone,
         transformer,
-        q_estractor,
+        q_extractor,
         track_embed=query_interaction_layer,
         num_feature_levels=args.num_feature_levels,
         num_classes=num_classes,

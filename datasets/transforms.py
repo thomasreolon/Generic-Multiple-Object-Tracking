@@ -289,8 +289,7 @@ def pad(image, target, padding):
     if target is None:
         return padded_image, None
     target = target.copy()
-    # should we do something wrt the original size?
-    target["size"] = torch.tensor(padded_image[::-1])
+
     if "masks" in target:
         target['masks'] = torch.nn.functional.pad(target['masks'], (0, padding[0], 0, padding[1]))
     return padded_image, target
@@ -553,6 +552,11 @@ class MotRandomResize(RandomResize):
         ret_targets = []
         for img_i, targets_i in zip(imgs, targets):
             img_i, targets_i = resize(img_i, targets_i, size, self.max_size)
+
+            w,h = img_i.size
+            pad_x, pad_y = (32-w)%32, (32-h)%32
+            if pad_x+pad_y > 0:
+                img_i, targets_i = pad(img_i, targets_i, (pad_x, pad_y))
             ret_imgs.append(img_i)
             ret_targets.append(targets_i)
         return ret_imgs, ret_targets

@@ -611,7 +611,7 @@ class MOTR(nn.Module):
         return frame_res
 
     @torch.no_grad()
-    def inference_single_image(self, img, ori_img_size, track_instances=None, proposals=None):
+    def inference_single_image(self, img, ori_img_size, track_instances=None, proposals=None, exemplar=None):
         if not isinstance(img, NestedTensor):
             img = nested_tensor_from_tensor_list(img)
         if track_instances is None:
@@ -643,6 +643,7 @@ class MOTR(nn.Module):
             'pred_logits': [],
             'pred_boxes': [],
         }
+        data['proposals'] = torch.zeros(0,5, device=frames[0].device)
         track_instances = None
         keys = list(self._generate_empty_tracks()._fields.keys())
         for frame_index, (frame, gt, proposals) in enumerate(zip(frames, data['gt_instances'], data['proposals'])):
@@ -715,6 +716,7 @@ def build(args):
         'e2e_joint': 1,
         'e2e_static_mot': 1,
         'e2e_gmot': 1,
+        'e2e_fscd': 1,
     }
     assert args.dataset_file in dataset_to_num_classes
     num_classes = dataset_to_num_classes[args.dataset_file]

@@ -11,8 +11,7 @@ class ImgExemplarSelfAttn(nn.Module):
         self.num_queries = num_queries
         self.similarity = nn.Parameter(torch.eye(emb_size), requires_grad=True)
         self.v = nn.Linear(emb_size, emb_size, bias=False)
-
-
+        self.q_after = nn.Linear(emb_size, emb_size)
 
     
     def forward(self, img_feat, exe_feat, mask=None):
@@ -58,7 +57,7 @@ class ImgExemplarSelfAttn(nn.Module):
         new_img_feat = attn_matrix @ values #  BxHWxC
         new_img_feat = new_img_feat.permute(0,2,1).view(B,C,H,W)
 
-        return new_img_feat+img_feat, queries
+        return new_img_feat+img_feat, self.q_after(queries)
 
     @torch.no_grad() 
     def get_queries(self, attn_matrix, shapes):

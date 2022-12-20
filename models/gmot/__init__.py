@@ -199,7 +199,7 @@ class ClipMatcher(SetCriterion):
             gt_labels_target = gt_labels_target.to(src_logits)
             loss_ce = sigmoid_focal_loss(src_logits.flatten(1),
                                              gt_labels_target.flatten(1),
-                                             alpha=0.25,
+                                             alpha=0.12,
                                              gamma=2,
                                              num_boxes=num_boxes, mean_in_dim1=False)
             loss_ce = loss_ce.sum()
@@ -586,7 +586,8 @@ class MyMOTR(nn.Module):
         # sums to detection queries the infos from the frames
         new_queries = track_instances.query_pos
         new_queries = torch.cat([
-                (new_queries[:self.num_queries]+queries.squeeze(0))/2, 
+                # (new_queries[:self.num_queries]+queries.squeeze(0))/2, 
+                queries.squeeze(0), 
                 new_queries[self.num_queries:]
             ],dim=0
         )
@@ -772,11 +773,11 @@ class MyMOTR(nn.Module):
             outputs['pred_logits'].append(frame_res['pred_logits'])
             outputs['pred_boxes'].append(frame_res['pred_boxes'])
 
-            if True:     # if true will show detections for each image (debugging)
+            if False:     # if true will show detections for each image (debugging)
                 import cv2
                 dt_instances = self.post_process(track_instances, data['imgs'][0].shape[-2:])
 
-                keep = dt_instances.scores > .02
+                keep = dt_instances.scores > .004
                 keep &= dt_instances.obj_idxes >= 0
                 dt_instances = dt_instances[keep]
 
@@ -857,7 +858,7 @@ def build(args):
                                     'frame_{}_ps{}_loss_giou'.format(i, j): args.giou_loss_coef,
                                     })
     losses = ['labels', 'boxes']
-    criterion = ClipMatcher(num_classes, matcher=img_matcher, weight_dict=weight_dict, losses=losses)
+    criterion = ClipMatcher(1, matcher=img_matcher, weight_dict=weight_dict, losses=losses)
     criterion.to(device)
     postprocessors = {}
     model = MyMOTR(
@@ -866,7 +867,7 @@ def build(args):
         q_extractor,
         track_embed=query_interaction_layer,
         num_feature_levels=args.num_feature_levels,
-        num_classes=num_classes,
+        num_classes=1,
         num_queries=args.num_queries,
         aux_loss=args.aux_loss,
         criterion=criterion,

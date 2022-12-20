@@ -418,7 +418,7 @@ class MotRandomShiftExtender(object):
                     
             prev_shift = shift
 
-        return imgs, targets
+        return imgs[1:], targets[1:]
 
 
 class FixedMotRandomShift(object):
@@ -542,17 +542,24 @@ class RandomResize(object):
 
 class MotRandomResize(RandomResize):
     def __call__(self, imgs, targets):
-        size = random.choice(self.sizes)
 
-        w,h =  imgs[0].size
-        if max(w,h)/min(w,h)*size**2 > 864*1052: # if image is too big, use smaller size
-            size = self.sizes[0]
+        # images too big cause CUDA OOM --> images with this number of pixels (730*1000) are still supported in a 8GB GPU
+        tries_left = 10
+        while tries_left>0:
+            tries_left -= 1
+            size = random.choice(self.sizes)
+            w,h =  imgs[0].size
+            if max(w,h)/min(w,h)*size**2 < 730*1000:
+                tries_left = -1
+        if tries_left==-1: size = 544
 
+        # once we get the size we resize each image
         ret_imgs = []
         ret_targets = []
         for img_i, targets_i in zip(imgs, targets):
             img_i, targets_i = resize(img_i, targets_i, size, self.max_size)
 
+            # pad to make the image w/h divisible by 32  --> won't cause problems after scaling up feature maps to sum them to "wider" features
             w,h = img_i.size
             pad_x, pad_y = (32-w)%32, (32-h)%32
             if pad_x+pad_y > 0:

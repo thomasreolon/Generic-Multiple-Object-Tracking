@@ -1,3 +1,4 @@
+import sys; sys.path.append('/home/intern/Desktop/Generic-Multiple-Object-Tracking')
 from torch.utils.data import Dataset
 from PIL import Image
 import json
@@ -28,6 +29,8 @@ class FSCDataset(Dataset):
         all_ann = json.load(open(args.fscd_path+'/annotation_FSC147_384.json', 'r'))
 
         for k,v in det2.items():
+            if k=='images': v=[{**img, 'id':img['id']+100000} for img in v]
+            if k=='annotations': v=[{**img, 'image_id':img['image_id']+100000} for img in v]
             det[k] += v
 
         self.detections = self.load_anns(all_ann, det)
@@ -41,7 +44,6 @@ class FSCDataset(Dataset):
 
         for boxinfo in d_det['annotations']:
             if boxinfo['image_id'] not in id2img: 
-                print(boxinfo)
                 continue
             img_path = id2img[ boxinfo['image_id'] ]
             bbs[img_path].append(boxinfo['bbox'])
@@ -82,7 +84,7 @@ class FSCDataset(Dataset):
         return [img], [target]
 
     def __getitem__(self, idx):
-        idx = idx%5 + 35
+        idx = idx%3 + 10
         images, targets = self._pre_single_frame(idx)
         if self.transform is not None:
             images, targets = self.transform(images, targets)
@@ -153,7 +155,7 @@ def make_transforms_for_mot17(image_set, args=None):
         T.MotToTensor(),
         T.MotNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
-    scales = [544, 608, 640, 672, 704, 736, 768, 800, 832, 864]
+    scales = [608, 640, 672, 704, 736, 768, 800, 832, 864]
 
     if image_set == 'train':
         return T.MotCompose([

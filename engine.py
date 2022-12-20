@@ -39,29 +39,28 @@ def train_one_epoch_mot(model: torch.nn.Module, criterion: torch.nn.Module,
 
     # for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
     for data_dict in metric_logger.log_every(data_loader, print_freq, header):
-        gc.collect()
-        torch.cuda.empty_cache()
+        gc.collect(); torch.cuda.empty_cache()
 
-        # images are a sequence of 5 frames from the same video
-        import cv2, numpy as np
-        imgs = data_dict['imgs']
-        concat = torch.cat(imgs, dim=1)
-        concat = np.ascontiguousarray(concat.clone().permute(1,2,0).numpy() [:,:,::-1])
-        # concat = (((concat * 0.22) + 0.5) * 255)
+        # # images are a sequence of 5 frames from the same video (show GT for debugging)
+        # import cv2, numpy as np
+        # imgs = data_dict['imgs']
+        # concat = torch.cat(imgs, dim=1)
+        # concat = np.ascontiguousarray(concat.clone().permute(1,2,0).numpy() [:,:,::-1])
+        # # concat = (((concat * 0.22) + 0.5) * 255)
 
-        for i in range(len(imgs)):
-            for box in data_dict['gt_instances'][i].boxes:
-                box = (box.view(2,2) * torch.tensor([imgs[0].shape[2], imgs[0].shape[1]]).view(1,2)).int()
-                x1,x2 = box[0,0] - box[1,0]//2, box[0,0] + box[1,0]//2
-                y1,y2 = box[0,1] - box[1,1]//2, box[0,1] + box[1,1]//2
-                y1, y2 = y1+imgs[0].shape[1]*i, y2+imgs[0].shape[1]*i
-                tmp = concat[y1:y2, x1:x2].copy()
-                concat[y1-2:y2+2, x1-2:x2+2] = 1
-                concat[y1:y2, x1:x2] = tmp
+        # for i in range(len(imgs)):
+        #     for box in data_dict['gt_instances'][i].boxes:
+        #         box = (box.view(2,2) * torch.tensor([imgs[0].shape[2], imgs[0].shape[1]]).view(1,2)).int()
+        #         x1,x2 = box[0,0] - box[1,0]//2, box[0,0] + box[1,0]//2
+        #         y1,y2 = box[0,1] - box[1,1]//2, box[0,1] + box[1,1]//2
+        #         y1, y2 = y1+imgs[0].shape[1]*i, y2+imgs[0].shape[1]*i
+        #         tmp = concat[y1:y2, x1:x2].copy()
+        #         concat[y1-2:y2+2, x1-2:x2+2] = 1
+        #         concat[y1:y2, x1:x2] = tmp
 
-        concat = cv2.resize(concat, (400, 1300))
-        cv2.imshow('batch', concat/4+ .3) 
-        cv2.waitKey()
+        # concat = cv2.resize(concat, (400, 1300))
+        # cv2.imshow('batch', concat/4+ .3) 
+        # cv2.waitKey()
 
 
         data_dict = data_dict_to_cuda(data_dict, device)

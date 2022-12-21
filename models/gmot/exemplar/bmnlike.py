@@ -74,11 +74,8 @@ class ImgExemplarSelfAttn(nn.Module):
         max_ = torch.zeros_like(simil).bool()
         max_[:, 1:-1, 1:-1] = c1[:, 1:, 1:-1] & c2[:, :-1, 1:-1] & c3[:, 1:-1, 1:] & c4[:, 1:-1, :-1]
 
-        # import cv2
-        # hm = simil[0].clone().cpu().numpy()
-        # hm = cv2.resize((hm-hm.min()) / (hm.max() - hm.min()), (800,800))
-        # cv2.imshow('hm',hm)
-        # cv2.waitKey(30)
+        import cv2
+        hm = simil[0].clone().cpu().unsqueeze(2).expand(-1,-1,3).numpy()
 
         # kills all points with a bigger neighbour nearby
         simil[~max_] -= 1e9
@@ -89,6 +86,15 @@ class ImgExemplarSelfAttn(nn.Module):
         hcoord = (q_ids // W).unsqueeze(2)
         wcoord = (q_ids % W).unsqueeze(2)
         tmp = torch.cat((hcoord,wcoord), dim=2)
+
+        import numpy as np
+        hm = (hm-hm.min()) / (hm.max() - hm.min())
+        for p in tmp[0]:
+            hm[p[0]:p[0]+2, p[1]:p[1]+2] = (0,0,1)
+        hm = cv2.resize(hm, (800,800))
+        cv2.imshow('hm',hm)
+        cv2.waitKey(30)
+
 
         return q_ids.to(attn_matrix.device), (tmp, [H,W])
 

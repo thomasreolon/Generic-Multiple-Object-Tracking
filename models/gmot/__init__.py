@@ -610,7 +610,7 @@ class MyMOTR(nn.Module):
             query_embed = new_queries
             ref_pts = new_ref_p
             attn_mask = None
-
+        print('query after', query_embed.shape, '\n')
 
         hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact = \
             self.transformer(srcs, masks, pos, query_embed, ref_pts=ref_pts,
@@ -695,10 +695,11 @@ class MyMOTR(nn.Module):
             img = nested_tensor_from_tensor_list(img)
         if track_instances is None:
             track_instances = self._generate_empty_tracks(proposals)
-        else:
-            track_instances = Instances.cat([
-                self._generate_empty_tracks(proposals),
-                track_instances])
+            # TODO:   generate from query if code will be moved
+        # else:
+        #     track_instances = Instances.cat([
+        #         self._generate_empty_tracks(proposals),
+        #         track_instances])
         res = self._forward_single_image(img,
                                          track_instances=track_instances,
                                          exemplar=exemplar)
@@ -742,9 +743,11 @@ class MyMOTR(nn.Module):
             if track_instances is None:
                 track_instances = self._generate_empty_tracks(proposals)
             else:
+                # should work TODO with this commented --->  check how instances_len(changes through time)
                 track_instances = Instances.cat([
                     self._generate_empty_tracks(proposals),
                     track_instances])
+            print('track instances shape', track_instances.query_pos.shape)
 
             if self.use_checkpoint and frame_index < len(frames) - 1:    # what does this do??
                 def fn(frame, gtboxes, *args):
@@ -783,7 +786,7 @@ class MyMOTR(nn.Module):
             outputs['pred_logits'].append(frame_res['pred_logits'])
             outputs['pred_boxes'].append(frame_res['pred_boxes'])
 
-            if False:     # if true will show detections for each image (debugging)
+            if True:     # if true will show detections for each image (debugging)
                 import cv2
                 dt_instances = self.post_process(track_instances, data['imgs'][0].shape[-2:])
 

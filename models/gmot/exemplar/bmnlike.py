@@ -39,7 +39,7 @@ class ImgExemplarSelfAttn(nn.Module):
         attn_matrix = unrolled.permute(0,2,1) @ self.similarity @ concat  # BxHWx(HW+1)
 
         # select best pixels for queries
-        q_ids = self.get_queries(attn_matrix, img_feat.shape)
+        q_ids, tmp = self.get_queries(attn_matrix, img_feat.shape)
 
         queries=[] # maybe there is a better way
         for img, id in zip(values[:,:-1], q_ids):
@@ -57,27 +57,40 @@ class ImgExemplarSelfAttn(nn.Module):
         new_img_feat = attn_matrix @ values #  BxHWxC
         new_img_feat = new_img_feat.permute(0,2,1).view(B,C,H,W)
 
-        return new_img_feat+img_feat, self.q_after(queries)
+        return new_img_feat+img_feat, self.q_after(queries), tmp
 
     @torch.no_grad() 
     def get_queries(self, attn_matrix, shapes):
         B,_,H,W = shapes
 
         # similarity between each pixel and the exemplar
-        simil = attn_matrix[:,:,-1].detach().clone().cpu().view(B,H,W)  # BxHW
+        simil = attn_matrix[:,:,-1].detach().clone().view(B,H,W)  # BxHW
 
         # NMS like
         c1 = simil[:, :-1] >= simil[:, 1:]  # bigger than up
         c2 = simil[:, 1:] > simil[:, :-1]  # bigger than down
         c3 = simil[:, :,:-1] >= simil[:, :,1:]  # bigger than left
         c4 = simil[:, :,1:] > simil[:, :,:-1]  # bigger than right
-        max_ = c1[:, 1:, 1:-1] & c2[:, :-1, 1:-1] & c3[:, 1:-1, 1:] & c4[:, 1:-1, :-1]
+        max_ = torch.zeros_like(simil).bool()
+        max_[:, 1:-1, 1:-1] = c1[:, 1:, 1:-1] & c2[:, :-1, 1:-1] & c3[:, 1:-1, 1:] & c4[:, 1:-1, :-1]
+
+        # import cv2
+        # hm = simil[0].clone().cpu().numpy()
+        # hm = cv2.resize((hm-hm.min()) / (hm.max() - hm.min()), (800,800))
+        # cv2.imshow('hm',hm)
+        # cv2.waitKey(30)
 
         # kills all points with a bigger neighbour nearby
-        simil[:, 1:-1, 1:-1][~max_] -= 1e9
+        simil[~max_] -= 1e9
 
-        _, q_ids = simil.view(B,H*W).topk(self.num_queries)  
-        return q_ids
+
+        _, q_ids = simil.view(B,H*W).topk(self.num_queries)
+
+        hcoord = (q_ids // W).unsqueeze(2)
+        wcoord = (q_ids % W).unsqueeze(2)
+        tmp = torch.cat((hcoord,wcoord), dim=2)
+
+        return q_ids.to(attn_matrix.device), (tmp, [H,W])
 
 
 class ImgExemplarSelfAttnV2(nn.Module):

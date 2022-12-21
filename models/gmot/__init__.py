@@ -564,7 +564,7 @@ class MyMOTR(nn.Module):
         exemplar,_ = self.backbone(exemplar)
         exemplar, _ = features[-1].decompose()
         exemplar = self.input_proj[len(features)-1](exemplar)
-        srcs[-1], queries = self.q_extractor(srcs[-1], exemplar)
+        srcs[-1], queries, proposed_q = self.q_extractor(srcs[-1], exemplar)
 
         ## UPSCALE PART
         srcs = self.idaup(srcs, 0, len(srcs))
@@ -584,23 +584,31 @@ class MyMOTR(nn.Module):
                 pos.append(pos_l)
 
         # sums to detection queries the infos from the frames
-        new_queries = track_instances.query_pos
+        # new_queries = queries.squeeze(0)
+
         new_queries = torch.cat([
-                # (new_queries[:self.num_queries]+queries.squeeze(0))/2, 
-                queries.squeeze(0), 
-                new_queries[self.num_queries:]
+                queries.squeeze(0),           # detection queries
+                track_instances.query_pos,    # prev_frame / learned
             ],dim=0
         )
+
+        new_ref_p = torch.cat([
+                # positions of queries in the images as (x,y)  :  (0,0)topleft  (1,1)bottomright
+                proposed_q[0][0] / torch.tensor([proposed_q[1]]).view(1,2).to(proposed_q[0].device),   # TODO: clean up;   trackqueries from None in this function
+                track_instances.ref_pts[:,:2],
+            ],dim=0
+        )
+
         if gtboxes is not None:
             n_dt = len(track_instances)
             ps_tgt = self.refine_embed.weight.expand(gtboxes.size(0), -1)
             query_embed = torch.cat([new_queries, ps_tgt])
-            ref_pts = torch.cat([track_instances.ref_pts, gtboxes])
+            ref_pts = torch.cat([new_ref_p, gtboxes[:,:2]])
             attn_mask = torch.zeros((len(ref_pts), len(ref_pts)), dtype=bool, device=ref_pts.device)
             attn_mask[:n_dt, n_dt:] = True
         else:
             query_embed = new_queries
-            ref_pts = track_instances.ref_pts
+            ref_pts = new_ref_p
             attn_mask = None
 
 
@@ -633,7 +641,7 @@ class MyMOTR(nn.Module):
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
         out['hs'] = hs[-1]
-        return out
+        return out, proposed_q
 
     def _post_process_single_image(self, frame_res, track_instances, is_last):
         if self.query_denoise > 0:
@@ -742,18 +750,18 @@ class MyMOTR(nn.Module):
                 def fn(frame, gtboxes, *args):
                     frame = nested_tensor_from_tensor_list([frame])      
                     tmp = Instances((1, 1), **dict(zip(keys, args)))
-                    frame_res = self._forward_single_image(frame, tmp, gtboxes, exemplar) # tmp is made from [track_instances.get(k) for k in keys]
+                    frame_res, proposed_q = self._forward_single_image(frame, tmp, gtboxes, exemplar) # tmp is made from [track_instances.get(k) for k in keys]
                     return (
                         frame_res['pred_logits'],
                         frame_res['pred_boxes'],
                         frame_res['hs'],
                         *[aux['pred_logits'] for aux in frame_res['aux_outputs']],
                         *[aux['pred_boxes'] for aux in frame_res['aux_outputs']]
-                    )
+                    ), proposed_q
 
                 args = [frame, gtboxes] + [track_instances.get(k) for k in keys]
                 params = tuple((p for p in self.parameters() if p.requires_grad))
-                tmp = checkpoint.CheckpointFunction.apply(fn, len(args), *args, *params)
+                tmp, proposed_q = checkpoint.CheckpointFunction.apply(fn, len(args), *args, *params)
                 frame_res = {
                     'pred_logits': tmp[0],
                     'pred_boxes': tmp[1],
@@ -765,9 +773,11 @@ class MyMOTR(nn.Module):
                 }
             else:
                 frame = nested_tensor_from_tensor_list([frame])
-                frame_res = self._forward_single_image(frame, track_instances, gtboxes, exemplar)
+                frame_res, proposed_q = self._forward_single_image(frame, track_instances, gtboxes, exemplar)
 
             frame_res = self._post_process_single_image(frame_res, track_instances, False) #is_last)
+
+            proposed_q, (H,W) = proposed_q
 
             track_instances = frame_res['track_instances']
             outputs['pred_logits'].append(frame_res['pred_logits'])
@@ -776,6 +786,9 @@ class MyMOTR(nn.Module):
             if False:     # if true will show detections for each image (debugging)
                 import cv2
                 dt_instances = self.post_process(track_instances, data['imgs'][0].shape[-2:])
+
+                proposed_q = proposed_q.cpu() * torch.tensor([data['imgs'][0].shape[1]/H, data['imgs'][0].shape[2]/W]).view(1,1,2)
+                proposed_q = proposed_q.int()
 
                 keep = dt_instances.scores > .004
                 keep &= dt_instances.obj_idxes >= 0
@@ -796,13 +809,17 @@ class MyMOTR(nn.Module):
                     img = data['imgs'][frame_index].clone().cpu().permute(1,2,0).numpy()[:,:,::-1]
                     for xyxy, track_id in zip(bbox_xyxy, identities):
                         if track_id < 0 or track_id is None:
-                            continue
+                            pass #continue
                         x1, y1, x2, y2 = [int(a) for a in xyxy]
                         color = tuple([(((5+track_id*3)*4909 % p)%256) /110 for p in (3001, 1109, 2027)])
 
                         tmp = img[ y1:y2, x1:x2].copy()
                         img[y1-3:y2+3, x1-3:x2+3] = color
                         img[y1:y2, x1:x2] = tmp
+
+                    for p in proposed_q[0]:
+                        img[p[0]:p[0]+3, p[1]:p[1]+3] = (0,2.2,0)
+                
                     cv2.imshow('preds', img/4+.4)
                     cv2.waitKey()
 

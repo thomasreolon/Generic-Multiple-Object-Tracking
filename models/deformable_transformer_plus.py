@@ -355,6 +355,8 @@ class DeformableTransformerDecoderLayer(nn.Module):
         # self attention
         tgt = self._forward_self_attn(tgt, query_pos, attn_mask)
         # cross attention
+        # print('bREFERENCE POINTS', reference_points)
+
         tgt2 = self.cross_attn(self.with_pos_embed(tgt, query_pos),
                                reference_points,
                                src, src_spatial_shapes, level_start_index, src_padding_mask)
@@ -422,7 +424,7 @@ class DeformableTransformerDecoder(nn.Module):
             else:
                 assert reference_points.shape[-1] == 2
                 reference_points_input = reference_points[:, :, None] * src_valid_ratios[:, None]
-            query_pos = pos2posemb(reference_points)
+            query_pos = pos2posemb(reference_points, num_pos_feats=256//reference_points.shape[-1])
             output = layer(output, query_pos, reference_points_input, src, src_spatial_shapes,
                            src_level_start_index, src_padding_mask, mem_bank, mem_bank_pad_mask, attn_mask)
 

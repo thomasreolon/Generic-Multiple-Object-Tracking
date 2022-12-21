@@ -3,12 +3,11 @@
 --num_feature_levels 3
 --num_queries 100
 --query_interaction_layer QIMv2
---epochs 3
---lr_drop 20
+--epochs 50
+--lr_drop 15
 --with_box_refine
---lr 1e-3
+--lr 2e-4
 --lr_backbone 8e-5
---pretrained /home/intern/Desktop/Generic-Multiple-Object-Tracking/checkpoint_last.pth
 --batch_size 1
 --sample_interval 10
 --sample_mode random_interval
@@ -21,3 +20,4 @@
 --use_checkpoint
 --small_ds
 --fscd_path /home/intern/Desktop/datasets/FSCD147
+--sample_interval 25

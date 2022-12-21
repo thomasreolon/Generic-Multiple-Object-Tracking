@@ -91,7 +91,6 @@ class FSCDataset(Dataset):
         return [img], [target]
 
     def __getitem__(self, idx):
-        idx = idx%3 + 10 ################################
         images, targets = self._pre_single_frame(idx)
         if self.transform is not None:
             images, targets = self.transform(images, targets)

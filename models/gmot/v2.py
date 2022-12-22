@@ -27,7 +27,7 @@ from models.structures import Instances, Boxes, pairwise_iou, matched_boxlist_io
 
 from ..backbone import build_backbone
 from ..matcher import build_matcher
-from ..deformable_transformer_plus import build_deforamble_transformer, pos2posemb
+from ..deformable_transformer_plus import build_deforamble_transformer, pos2posemb, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from ..qim import build as build_query_interaction_layer
 from ..deformable_detr import SetCriterion, MLP, sigmoid_focal_loss
 
@@ -551,11 +551,9 @@ class MyMOTR(nn.Module):
         masks = []
         for l, feat in enumerate(features):
             src, mask = feat.decompose()
-            srcs.append(self.input_proj[l](src)) 
+            srcs.append(self.input_proj[l](src))
             masks.append(mask)
             assert mask is not None
-
-        srcs[-1] = srcs[-1][:,:-1] # 255 CH
 
         if isinstance(exemplar, torch.Tensor):
             exemplar = nested_tensor_from_tensor_list([exemplar])
@@ -566,7 +564,7 @@ class MyMOTR(nn.Module):
         exemplar,_ = self.backbone(exemplar)
         exemplar, _ = features[-1].decompose()
         exemplar = self.input_proj[len(features)-1](exemplar)
-        srcs[-1], queries, proposed_q = self.q_extractor(srcs[-1], exemplar[:,:-1])
+        srcs[-1], queries, proposed_q = self.q_extractor(srcs[-1], exemplar)
 
         ## UPSCALE PART
         srcs = self.idaup(srcs, 0, len(srcs))
@@ -836,6 +834,16 @@ class MyMOTR(nn.Module):
         return outputs
 
 
+
+def build_decoder(args):
+    decoder_layer = DeformableTransformerDecoderLayer(args.hidden_dim, args.dim_feedforward,
+                                                        0.1, 'relu',
+                                                        args.num_feature_levels, 8, 4, not args.decoder_cross_self,
+                                                        sigmoid_attn=args.sigmoid_attn, extra_track_attn=args.extra_track_attn,
+                                                        memory_bank=args.memory_bank_type == 'MemoryBankFeat')
+    return DeformableTransformerDecoder(decoder_layer, args.dec_layers, True)
+
+
 def build(args):
     dataset_to_num_classes = {
         'coco': 91,
@@ -852,7 +860,7 @@ def build(args):
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
-    q_extractor = ImgExemplarSelfAttn(args.hidden_dim-1, args.num_queries)
+    q_extractor = ImgExemplarSelfAttn(args.hidden_dim, args.num_queries)
     transformer = build_deforamble_transformer(args)
     d_model = transformer.d_model
     hidden_dim = args.dim_feedforward

@@ -149,7 +149,7 @@ def get_args_parser():
 
     # end-to-end mot settings.
     parser.add_argument('--fscd_path', default='/home/intern/Desktop/datasets/FSCD147', type=str)
-    parser.add_argument('--mot_path', default='C:/Users/Tom/Dropbox/Il mio PC (DESKTOP-7KFTNNP)/Desktop/GMOT', type=str)
+    parser.add_argument('--mot_path', default='/home/intern/Desktop/datasets/GMOT', type=str)
     parser.add_argument('--det_db', default=[None, '/home/intern/Desktop/Generic-Multiple-Object-Tracking/data/det_db_motrv2.json'][0], type=str)
     parser.add_argument('--input_video', default='figs/demo.mp4', type=str)
     parser.add_argument('--data_txt_path_train',

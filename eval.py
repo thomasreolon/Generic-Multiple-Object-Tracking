@@ -35,11 +35,16 @@ def main():
     # load dataset
     dataset = load_svdataset(args.ds_eval, args.ds_split)
 
+    rank = int(os.environ.get('RLAUNCH_REPLICA', '0'))
+    ws = int(os.environ.get('RLAUNCH_REPLICA_TOTAL', '1'))
+    dataset = dataset[rank::ws]
 
+    args.mot_path = '/home/intern/Desktop/datasets/GMOT/GenericMOT_JPEG_Sequence/'
 
+    det = Detector(args, detr, dataset)
 
-
-
+    for vid in range(len(dataset)):
+        det.detect(args.score_threshold, vis=True, video=vid)
 
 
 def get_args():
@@ -53,27 +58,58 @@ def get_args():
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     return args
 
-def load_svdataset(datasetname, split):
+def load_svdataset(datasetname, split, args):
     assert datasetname in {'e2e_gmot', 'e2e_fscd'}, f'invalid dataset "{datasetname}"'
     assert split in {'train', 'val', 'test'}, f'invalid dataset "{split}"'
     
     if datasetname=='e2e_gmot':
-        video_images_list = load_gmot(split)
+        return load_gmot(split, args)
     elif datasetname=='e2e_fscd':
-        video_images_list = load_fscd(split)
+        return load_fscd(split, args)
 
-def load_gmot(split): raise NotImplementedError()
+def load_gmot(split, args):
+    base_path = args.mot_path+'/GenericMOT_JPEG_Sequence/'
 
-def load_fscd(split): raise NotImplementedError
+    list_dataset = []
+    videos = os.listdir(base_path)
 
+    for video in videos:
+        # get 1st BB
+        gt = args.mot_path+f'/track_label/{video}.txt'
+        with open(gt, 'r') as fin:
+            line = fin.readline()
+            if line[0] == '0': break
+        line = [int(l) for l in line.split(',')]
+        bb = line[2], line[3], line[2]+line[4], line[3]+line[5], 
+
+        # get images
+        imgs = sorted(os.listdir(f'{base_path}{video}/img1'))
+
+        list_dataset.append((f'{base_path}{video}/img1/', imgs, bb))  # none should be the exemplar_bb xyxy
+
+    return list_dataset
+
+
+def load_fscd(split, args):
+    args.sampler_lengths[0] = 30
+    ds = build_dataset(split, args)
+
+    list_dataset = []
+    for vid in range(min(len(ds), 3)):
+        data = ds[vid]
+        images = [img.clone().permute(1,2,0).numpy() for img in data['imgs']]
+        exemplar = data['patches'][0]
+
+        list_dataset.append(None, images, exemplar)
+    return list_dataset
 
 
 class ListImgDataset(Dataset):
-    def __init__(self, base_path, img_list, frame1_bb_list) -> None:
+    def __init__(self, base_path, img_list, exemplar_bb) -> None:
         super().__init__()
         self.base_path = base_path
         self.img_list = img_list
-        self.img_list = frame1_bb_list
+        self.exemplar = exemplar_bb
 
         '''
         common settings
@@ -83,15 +119,19 @@ class ListImgDataset(Dataset):
         self.mean = [0.485, 0.456, 0.406]
         self.std = [0.229, 0.224, 0.225]
 
-    def load_img_from_file(self, fpath_or_ndarray, bb):
-        # bb as a box coordinates array [x1,y1,x2,y2]
+    def load_img_from_file(self, fpath_or_ndarray):
         if isinstance(fpath_or_ndarray, str):
-            cur_img = cv2.imread(os.path.join(self.mot_path, fpath_or_ndarray))
+            # bb as a box coordinates array [x1,y1,x2,y2]
+            bb = self.exemplar
+            cur_img = cv2.imread(os.path.join(self.base_path, fpath_or_ndarray))
             cur_img = cv2.cvtColor(cur_img, cv2.COLOR_BGR2RGB)
-        elif isinstance(fpath_or_ndarray, function):
+            exemplar = cur_img[bb[1]:bb[3], bb[0]:bb[2]]
+        elif isinstance(fpath_or_ndarray, ):
             cur_img = fpath_or_ndarray
+            exemplar = self.exemplar
+            cur_img = cur_img/4*.4      # de normalize
+            exemplar = exemplar/4*.4
         assert cur_img is not None
-        exemplar = cur_img[bb[1]:bb[3], bb[0]:bb[2]]
         return cur_img, exemplar
 
     def init_img(self, img, exemplar):
@@ -104,7 +144,9 @@ class ListImgDataset(Dataset):
         target_w = int(self.seq_w * scale)
         img = cv2.resize(img, (target_w, target_h))
         img = F.normalize(F.to_tensor(img), self.mean, self.std)
-        img = img.unsqueeze(0)
+        exem_wh = int(exemplar.shape[1]*scale), int(exemplar.shape[0]*scale)
+        exemplar = cv2.resize(exemplar, exem_wh)
+        exemplar = F.normalize(F.to_tensor(exemplar), self.mean, self.std)
         return img, ori_img, exemplar
 
     def __len__(self):
@@ -114,61 +156,12 @@ class ListImgDataset(Dataset):
         img, exemplar = self.load_img_from_file(self.img_list[index])
         return self.init_img(img, exemplar)
 
-class FSCDDataset(Dataset):
-    def __init__(self, args, vid=8) -> None:
-        super().__init__()
-        args.sampler_lengths[0] = 100
-        self.ds = build_dataset('val', args)
-
-        self._select(vid)
-
-        self.img_height = 736
-        self.img_width = 1312
-
-    def _select(self, vid):
-        data = self.ds[vid]
-        self.images = [img.clone().permute(1,2,0).numpy() for img in data['imgs']]
-        self.exemplar = data['patches']
-
-
-    def init_img(self, img):
-        ori_img = img.copy()
-        ori_img = ori_img/4+.4 # de_normalize
-        self.seq_h, self.seq_w = img.shape[:2]
-        scale = self.img_height / min(self.seq_h, self.seq_w)
-        if max(self.seq_h, self.seq_w) * scale > self.img_width:
-            scale = self.img_width / max(self.seq_h, self.seq_w)
-        target_h = int(self.seq_h * scale)
-        target_w = int(self.seq_w * scale)
-        img = cv2.resize(img, (target_w, target_h))
-        img = torch.from_numpy(img).permute(2,0,1).unsqueeze(0).contiguous()
-        return img, ori_img
-
-    def __len__(self):
-        return len(self.images)
-    
-    def __getitem__(self, index):
-        img = self.images[index]
-        img, ori_img = self.init_img(img)
-        exemplar = self.exemplar[0].clone(), self.exemplar[1].clone()
-        return img, ori_img, exemplar
-
 
 class Detector(object):
-    def __init__(self, args, model, vid):
+    def __init__(self, args, model, dataset):
         self.args = args
         self.detr = model
-
-        self.vid = vid
-        # self.seq_num = os.path.basename(vid)
-        # img_list = os.listdir(os.path.join(self.args.mot_path, vid, 'img1'))
-        # img_list = [os.path.join(vid, 'img1', i) for i in img_list if 'jpg' in i]
-
-        # self.img_list = sorted(img_list)
-        # self.img_len = len(self.img_list)
-
-        # self.predict_path = os.path.join(self.args.output_dir, args.exp_name)
-        # os.makedirs(self.predict_path, exist_ok=True)
+        self.dataset = dataset  # list of tuples: (/path/to/MOT/vidname, )
 
     @staticmethod
     def filter_dt_by_score(dt_instances: Instances, prob_threshold: float) -> Instances:
@@ -183,19 +176,12 @@ class Detector(object):
         keep = areas > area_threshold
         return dt_instances[keep]
 
-    def detect(self, prob_threshold=0.08, area_threshold=30, vis=True):
+    def detect(self, prob_threshold=0.6, area_threshold=30, vis=True, video=0):
         total_dts = 0
         total_occlusion_dts = 0
 
-        if self.args.det_db and os.path.exists(self.args.det_db):
-            with open(os.path.join(self.args.mot_path, self.args.det_db)) as f:
-                det_db = json.load(f)
-        else:
-            det_db = None
         
-        # loader = DataLoader(ListImgDataset(self.args.mot_path, self.img_list, det_db), 1, num_workers=2)
-        loader = DataLoader(FSCDDataset(self.args, self.vid), 1, num_workers=2)  # TODO: initialize dataset img_list in Detection.__init__ (instead of dataset)
-       
+        loader = DataLoader(ListImgDataset(*self.dataset[video]), 1, num_workers=2)  
         lines = []
         for i, data in enumerate(tqdm(loader)):
             cur_img, ori_img, proposals = data[0][0], data[1][0], data[2]
@@ -268,38 +254,7 @@ class RuntimeTrackerBase(object):
         track_instances.obj_idxes[to_del] = -1
 
 
-if __name__ == '__main__':
-
-    parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
-    parser.add_argument('--score_threshold', default=0.5, type=float)
-    parser.add_argument('--update_score_threshold', default=0.5, type=float)
-    parser.add_argument('--miss_tolerance', default=20, type=int)
-    args = parser.parse_args()
-    if args.output_dir:
-        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-
-    # load model and weights
-    detr, _, _ = build_model(args)
-    detr.track_embed.score_thr = args.update_score_threshold
-    detr.track_base = RuntimeTrackerBase(args.score_threshold, args.score_threshold, args.miss_tolerance)
-    checkpoint = torch.load(args.resume, map_location='cpu')
-    detr = load_model(detr, args.resume)
-    detr.eval()
-    detr = detr.to(args.device)
-
-    # # '''for GMOT''' 
-    vids = ['boat-3', 'boat-3', 'stock-1', 'airplane-1']
-
-    # # '''for FSCD147''' 
-    vids = [1,5,9]
 
 
-    rank = int(os.environ.get('RLAUNCH_REPLICA', '0'))
-    ws = int(os.environ.get('RLAUNCH_REPLICA_TOTAL', '1'))
-    vids = vids[rank::ws]
 
-    args.mot_path = '/home/intern/Desktop/datasets/GMOT/GenericMOT_JPEG_Sequence/'
 
-    for vid in vids:#vids:
-        det = Detector(args, model=detr, vid=vid)
-        det.detect(args.score_threshold, vis=True)

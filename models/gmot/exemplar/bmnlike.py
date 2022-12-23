@@ -90,7 +90,7 @@ class ImgExemplarSelfAttn(nn.Module):
         simil[~max_] -= 1e9
 
 
-        _, q_ids = simil.view(B,H*W).topk(self.num_queries)
+        _, q_ids = simil.view(B,H*W).topk(self.num_queries//5)
 
         hcoord = (q_ids // W).unsqueeze(2)
         wcoord = (q_ids % W).unsqueeze(2)

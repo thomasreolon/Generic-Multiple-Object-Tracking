@@ -364,6 +364,43 @@ class TrackerPostProcess(nn.Module):
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
+class PixelExtractor(nn.Module):
+    """maybe take avg of neighbours instead of single point (?)"""
+    def __init__(self) -> None:
+        super().__init__()
+    
+    def get_points_hw(self, r_hw, center, n_points):
+        points = []
+        step = 6.28318 / n_points
+        for i in range(n_points):
+            p = [center[0]-np.cos(i*step)*r_hw[0], center[1]-np.sin(i*step)*r_hw[1]]
+            points.append(np.round(p).astype(int).tolist())
+        return points
+
+    def forward(self, esrcs):
+        """the number of queries is always squarable (1,4,9,16)"""
+        # set exemplar as first pixel
+        queries = []
+        for lvl, src in enumerate(esrcs):
+            _,_,H,W = src.shape
+
+            # always get central pixel     # +1 
+            queries.append( src[:,:,H//2,W//2] )
+
+            # pixels in a oval
+            num_pix = 2*(len(esrcs)-lvl-1) # 4, 2, 0
+            if num_pix:
+                for h,w in self.get_points_hw((H//4, W//4), (H//2,W//2), num_pix):
+                    queries.append( src[:,:,h,w] )
+        return torch.stack(queries, dim=1)
+
+
+
+
+# a.view(2,1,2,1).expand(2,4,2,4).reshape(8,8)
+
+
+
 
 class MOTR(nn.Module):
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels, criterion, track_embed,
@@ -393,6 +430,7 @@ class MOTR(nn.Module):
         self.position = nn.Embedding(num_queries, 4)
         self.yolox_embed = nn.Embedding(1, hidden_dim)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
+        self.extractpixels = PixelExtractor()
         if query_denoise:
             self.refine_embed = nn.Embedding(1, hidden_dim)
         if num_feature_levels > 1:
@@ -494,11 +532,12 @@ class MOTR(nn.Module):
         return [{'pred_logits': a, 'pred_boxes': b, }
                 for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
 
-    def _forward_single_image(self, samples, track_instances: Instances, gtboxes=None):
+    def _forward_single_image(self, samples, track_instances: Instances, gtboxes=None, exemplar=None):
         features, pos = self.backbone(samples)
         src, mask = features[-1].decompose()
         assert mask is not None
 
+        ## ImgFeatures
         srcs = []
         masks = []
         for l, feat in enumerate(features):
@@ -506,20 +545,37 @@ class MOTR(nn.Module):
             srcs.append(self.input_proj[l](src))
             masks.append(mask)
             assert mask is not None
+        
+        ## ExemplarFeatures
+        if isinstance(exemplar, torch.Tensor):
+            exemplar = nested_tensor_from_tensor_list([exemplar])
+        elif isinstance(exemplar, list):
+            exemplar = NestedTensor(*exemplar)
+        e_features,_ = self.backbone(exemplar)
+        esrcs = []
+        for l, feat in enumerate(e_features):
+            src, _ = feat.decompose()
+            esrcs.append(self.input_proj[l](src)) 
 
+        ## append other scales if asked
         if self.num_feature_levels > len(srcs):
             _len_srcs = len(srcs)
             for l in range(_len_srcs, self.num_feature_levels):
                 if l == _len_srcs:
                     src = self.input_proj[l](features[-1].tensors)
+                    esrc = self.input_proj[l](e_features[-1].tensors)
                 else:
                     src = self.input_proj[l](srcs[-1])
+                    esrc = self.input_proj[l](esrcs[-1])
                 m = samples.mask
                 mask = F.interpolate(m[None].float(), size=src.shape[-2:]).to(torch.bool)[0]
                 pos_l = self.backbone[1](NestedTensor(src, mask)).to(src.dtype)
                 srcs.append(src)
+                esrcs.append(esrc)
                 masks.append(mask)
                 pos.append(pos_l)
+        
+        exemplar = self.extractpixels(esrcs)
 
         if gtboxes is not None:
             n_dt = len(track_instances)
@@ -535,7 +591,7 @@ class MOTR(nn.Module):
 
         hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact = \
             self.transformer(srcs, masks, pos, query_embed, ref_pts=ref_pts,
-                             mem_bank=track_instances.mem_bank, mem_bank_pad_mask=track_instances.mem_padding_mask, attn_mask=attn_mask)
+                             mem_bank=track_instances.mem_bank, mem_bank_pad_mask=track_instances.mem_padding_mask, attn_mask=attn_mask, exemplarq=exemplar)
 
         outputs_classes = []
         outputs_coords = []
@@ -639,6 +695,7 @@ class MOTR(nn.Module):
         if self.training:
             self.criterion.initialize_for_single_clip(data['gt_instances'])
         frames = data['imgs']  # list of Tensor.
+        exemplar = data['patches'] if 'patches' in data else None
         outputs = {
             'pred_logits': [],
             'pred_boxes': [],
@@ -670,7 +727,7 @@ class MOTR(nn.Module):
                 def fn(frame, gtboxes, *args):
                     frame = nested_tensor_from_tensor_list([frame])
                     tmp = Instances((1, 1), **dict(zip(keys, args)))
-                    frame_res = self._forward_single_image(frame, tmp, gtboxes)
+                    frame_res = self._forward_single_image(frame, tmp, gtboxes, exemplar)
                     return (
                         frame_res['pred_logits'],
                         frame_res['pred_boxes'],
@@ -693,7 +750,7 @@ class MOTR(nn.Module):
                 }
             else:
                 frame = nested_tensor_from_tensor_list([frame])
-                frame_res = self._forward_single_image(frame, track_instances, gtboxes)
+                frame_res = self._forward_single_image(frame, track_instances, gtboxes, exemplar)
             frame_res = self._post_process_single_image(frame_res, track_instances, False) #is_last)
 
             track_instances = frame_res['track_instances']

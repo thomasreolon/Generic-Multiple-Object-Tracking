@@ -22,11 +22,101 @@ from models.structures import Boxes, matched_boxlist_iou, pairwise_iou
 
 from util.misc import inverse_sigmoid
 from util.box_ops import box_cxcywh_to_xyxy
-from models.ops.modules import MSDeformAttn
+from models.ops.modules.ms_deform_attn import MSDeformAttnFunction, _is_power_of_2, warnings
+
+class MSDeformAttn(nn.Module):
+    def __init__(self, d_model=256, n_levels=4, n_heads=8, n_points=4, sigmoid_attn=False):
+        """
+        Multi-Scale Deformable Attention Module
+        :param d_model      hidden dimension
+        :param n_levels     number of feature levels
+        :param n_heads      number of attention heads
+        :param n_points     number of sampling points per attention head per feature level
+        """
+        super().__init__()
+        if d_model % n_heads != 0:
+            raise ValueError('d_model must be divisible by n_heads, but got {} and {}'.format(d_model, n_heads))
+        _d_per_head = d_model // n_heads
+        # you'd better set _d_per_head to a power of 2 which is more efficient in our CUDA implementation
+        if not _is_power_of_2(_d_per_head):
+            warnings.warn("You'd better set d_model in MSDeformAttn to make the dimension of each attention head a power of 2 "
+                          "which is more efficient in our CUDA implementation.")
+
+        self.im2col_step = 64
+        self.sigmoid_attn = sigmoid_attn
+
+        self.d_model = d_model
+        self.n_levels = n_levels
+        self.n_heads = n_heads
+        self.n_points = n_points
+
+        self.sampling_offsets = nn.Linear(d_model, n_heads * n_levels * n_points * 2)
+        self.attention_weights = nn.Linear(d_model, n_heads * n_levels * n_points)
+        self.value_proj = nn.Linear(d_model, d_model)
+        self.output_proj = nn.Linear(d_model, d_model)
+
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        constant_(self.sampling_offsets.weight.data, 0.)
+        thetas = torch.arange(self.n_heads, dtype=torch.float32) * (2.0 * math.pi / self.n_heads)
+        grid_init = torch.stack([thetas.cos(), thetas.sin()], -1)
+        grid_init = (grid_init / grid_init.abs().max(-1, keepdim=True)[0]).view(self.n_heads, 1, 1, 2).repeat(1, self.n_levels, self.n_points, 1)
+        for i in range(self.n_points):
+            grid_init[:, :, i, :] *= i + 1
+        with torch.no_grad():
+            self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
+        constant_(self.attention_weights.weight.data, 0.)
+        constant_(self.attention_weights.bias.data, 0.)
+        xavier_uniform_(self.value_proj.weight.data)
+        constant_(self.value_proj.bias.data, 0.)
+        xavier_uniform_(self.output_proj.weight.data)
+        constant_(self.output_proj.bias.data, 0.)
+
+    def forward(self, query, reference_points, input_flatten, input_spatial_shapes, input_level_start_index, input_padding_mask=None):
+        """
+        :param query                       (N, Length_{query}, C)
+        :param reference_points            (N, Length_{query}, n_levels, 2), range in [0, 1], top-left (0,0), bottom-right (1, 1), including padding area
+                                        or (N, Length_{query}, n_levels, 4), add additional (w, h) to form reference boxes
+        :param input_flatten               (N, \sum_{l=0}^{L-1} H_l \cdot W_l, C)
+        :param input_spatial_shapes        (n_levels, 2), [(H_0, W_0), (H_1, W_1), ..., (H_{L-1}, W_{L-1})]
+        :param input_level_start_index     (n_levels, ), [0, H_0*W_0, H_0*W_0+H_1*W_1, H_0*W_0+H_1*W_1+H_2*W_2, ..., H_0*W_0+H_1*W_1+...+H_{L-1}*W_{L-1}]
+        :param input_padding_mask          (N, \sum_{l=0}^{L-1} H_l \cdot W_l), True for padding elements, False for non-padding elements
+
+        :return output                     (N, Length_{query}, C)
+        """
+        N, Len_q, _ = query.shape
+        N, Len_in, _ = input_flatten.shape
+        assert (input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]).sum() == Len_in
+
+        value = self.value_proj(input_flatten)
+        if input_padding_mask is not None:
+            value.masked_fill_(input_padding_mask[..., None], float(0))
+        value = value.view(N, Len_in, self.n_heads, self.d_model // self.n_heads)
+        sampling_offsets = self.sampling_offsets(query).view(N, Len_q, self.n_heads, self.n_levels, self.n_points, 2)
+        attention_weights = self.attention_weights(query).view(N, Len_q, self.n_heads, self.n_levels * self.n_points)
+        if self.sigmoid_attn:
+            attention_weights = attention_weights.sigmoid().view(N, Len_q, self.n_heads, self.n_levels, self.n_points)
+        else:
+            attention_weights = F.softmax(attention_weights, -1).view(N, Len_q, self.n_heads, self.n_levels, self.n_points)
+        # N, Len_q, n_heads, n_levels, n_points, 2
+        if reference_points.shape[-1] == 2:
+            sampling_locations = reference_points[:, :, None, :, None, :] \
+                                 + sampling_offsets / input_spatial_shapes[None, None, None, :, None, (1, 0)]
+        elif reference_points.shape[-1] == 4:
+            sampling_locations = reference_points[:, :, None, :, None, :2] \
+                                 + sampling_offsets / self.n_points * reference_points[:, :, None, :, None, 2:] * 0.5
+        else:
+            raise ValueError(
+                'Last dim of reference_points must be 2 or 4, but get {} instead.'.format(reference_points.shape[-1]))
+        output = MSDeformAttnFunction.apply(
+            value, input_spatial_shapes, input_level_start_index, sampling_locations, attention_weights, self.im2col_step)
+        output = self.output_proj(output)
+        return output
 
 
 class DeformableTransformer(nn.Module):
-    def __init__(self, d_model=256, nhead=8,
+    def __init__(self, d_model=256, nhead=2,
                  num_encoder_layers=6, num_decoder_layers=6, dim_feedforward=1024, dropout=0.1,
                  activation="relu", return_intermediate_dec=False,
                  num_feature_levels=4, dec_n_points=4,  enc_n_points=4,
@@ -39,21 +129,16 @@ class DeformableTransformer(nn.Module):
         self.nhead = nhead
         self.two_stage = two_stage
         self.two_stage_num_proposals = two_stage_num_proposals
-
-        encoder_layer = DeformableTransformerEncoderLayer(d_model, dim_feedforward,
-                                                          dropout, activation,
-                                                          num_feature_levels, nhead, enc_n_points,
-                                                          sigmoid_attn=sigmoid_attn)
-        self.encoder = DeformableTransformerEncoder(encoder_layer, num_encoder_layers)
+        n_points = [4,4,8,8]
 
         decoder_layer = DeformableTransformerDecoderLayer(d_model, dim_feedforward,
                                                           dropout, activation,
-                                                          num_feature_levels, nhead, dec_n_points, decoder_self_cross,
+                                                          num_feature_levels+1, nhead, n_points[num_feature_levels-1], decoder_self_cross,
                                                           sigmoid_attn=sigmoid_attn, extra_track_attn=extra_track_attn,
                                                           memory_bank=memory_bank)
         self.decoder = DeformableTransformerDecoder(decoder_layer, num_decoder_layers, return_intermediate_dec)
 
-        self.level_embed = nn.Parameter(torch.Tensor(num_feature_levels, d_model))
+        self.level_embed = nn.Parameter(torch.Tensor(num_feature_levels+1, d_model))
 
         if two_stage:
             self.enc_output = nn.Linear(d_model, d_model)
@@ -128,47 +213,42 @@ class DeformableTransformer(nn.Module):
         valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
         return valid_ratio
 
-    def forward(self, srcs, masks, pos_embeds, query_embed=None, ref_pts=None, mem_bank=None, mem_bank_pad_mask=None, attn_mask=None, exemplarsrcs=None):
+    def forward(self, srcs, masks, pos_embeds, query_embed=None, ref_pts=None, mem_bank=None, mem_bank_pad_mask=None, attn_mask=None, exemplarq=None):
         assert self.two_stage or query_embed is not None
-
-        if exemplarsrcs==None: exemplarsrcs=[None]*3  # if not used exemplars
 
         # prepare input for encoder
         src_flatten = []
         mask_flatten = []
         lvl_pos_embed_flatten = []
         spatial_shapes = []
-        for lvl, (src, mask, pos_embed, esrc) in enumerate(zip(srcs, masks, pos_embeds, exemplarsrcs)):
+        for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, pos_embeds)):
             bs, c, h, w = src.shape
             spatial_shape = (h, w)
             spatial_shapes.append(spatial_shape)
             src = src.flatten(2).transpose(1, 2)  # B, HW, C
             mask = mask.flatten(1)
             pos_embed = pos_embed.flatten(2).transpose(1, 2)
-
-            # set exemplar as first pixel
-            num_pix = int(2**(len(src)-lvl-1))
-            qs = []
-            for i in range(num_pix):
-                pass
-
-
-
-
             lvl_pos_embed = pos_embed + self.level_embed[lvl].view(1, 1, -1)
             lvl_pos_embed_flatten.append(lvl_pos_embed)
             src_flatten.append(src)
             mask_flatten.append(mask)
+        
+        # # add exemplar queries
+        n = len(srcs)
+        spatial_shapes.append((n,n))
+        lvl_pos_embed_flatten.append(self.level_embed[n].expand(exemplarq.shape[0], exemplarq.shape[1], -1))
+        src_flatten.append(exemplarq)
+        mask_flatten.append(torch.zeros_like(exemplarq[:,:,0], dtype=bool))
+
         src_flatten = torch.cat(src_flatten, 1) #  B, HW+HW2... , C
         mask_flatten = torch.cat(mask_flatten, 1)
         lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)
         spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=src_flatten.device)
         level_start_index = torch.cat((spatial_shapes.new_zeros((1, )), spatial_shapes.prod(1).cumsum(0)[:-1]))
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
-
+        exempl_ratio = torch.tensor([1.,1], device=valid_ratios.device).view(1,1,2).expand(valid_ratios.shape[0], -1, -1)
+        valid_ratios = torch.cat((valid_ratios, exempl_ratio), dim=1)
         
-        src_flatten
-
         # prepare input for decoder
         bs = 1
 

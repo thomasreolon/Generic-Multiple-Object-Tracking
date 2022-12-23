@@ -11,7 +11,12 @@ class ImgExemplarSelfAttn(nn.Module):
         self.num_queries = num_queries
         self.similarity = nn.Parameter(torch.eye(emb_size), requires_grad=True)
         self.v = nn.Linear(emb_size, emb_size, bias=False)
-        self.q_after = nn.Linear(emb_size+1, emb_size+1)
+        self.q_after = nn.Sequential(
+            nn.LayerNorm(emb_size+1),
+            nn.Linear(emb_size+1, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, emb_size+1)
+        )
 
     
     def forward(self, img_feat, exe_feat, mask=None):
@@ -29,7 +34,6 @@ class ImgExemplarSelfAttn(nn.Module):
 
         #TODO: add pooling if exefeat is BChw
         exe_feat = exe_feat.mean(dim=(2,3))
-        exe_feat = exe_feat*1.2
 
         exe_feat = exe_feat.unsqueeze(2)            #  BxCx1
 
@@ -86,13 +90,14 @@ class ImgExemplarSelfAttn(nn.Module):
         simil[~max_] -= 1e9
 
 
-        _, q_ids = simil.view(B,H*W).topk(self.num_queries//5)
+        _, q_ids = simil.view(B,H*W).topk(self.num_queries)
 
         hcoord = (q_ids // W).unsqueeze(2)
         wcoord = (q_ids % W).unsqueeze(2)
         tmp = torch.cat((hcoord,wcoord), dim=2)
 
         return q_ids.to(attn_matrix.device), (tmp, [H,W])
+
 
 
 # class ImgExemplarSelfAttnV2(nn.Module):

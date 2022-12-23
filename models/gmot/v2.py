@@ -13,9 +13,10 @@ DETR model and criterion classes.
 """
 import copy
 import math
+import numpy as np
 import torch
 import torch.nn.functional as F
-from torch import nn
+from torch import nn, Tensor
 from typing import List
 
 from util import box_ops, checkpoint
@@ -27,53 +28,9 @@ from models.structures import Instances, Boxes, pairwise_iou, matched_boxlist_io
 
 from ..backbone import build_backbone
 from ..matcher import build_matcher
-from ..deformable_transformer_plus import build_deforamble_transformer, pos2posemb, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
+from .decoder.deformable2 import build_deforamble_transformer, pos2posemb
 from ..qim import build as build_query_interaction_layer
 from ..deformable_detr import SetCriterion, MLP, sigmoid_focal_loss
-
-from .exemplar.bmnlike import ImgExemplarSelfAttn
-
-class DeformConv(nn.Module):
-    def __init__(self, chi, cho):
-        super(DeformConv, self).__init__()
-        self.actf = nn.Sequential(
-            nn.BatchNorm2d(cho, momentum=0.1),
-            nn.ReLU(inplace=True)
-        )
-        # self.conv = DCN(chi, cho, kernel_size=(3, 3), stride=1, padding=1, dilation=1, deformable_groups=1)
-        self.conv = torch.nn.Conv2d(chi, cho, kernel_size=(3, 3), stride=1, padding=1, dilation=1)
-    @torch.cuda.amp.autocast()
-    def forward(self, x):
-        x_out = self.conv(x)
-        # print("1", x.dtype)
-        x_out = self.actf(x_out.type(x.dtype))
-        # print("2", x.dtype)
-        return x_out
-
-class IDAUpV3_bis(nn.Module):
-    # bilinear upsampling version of IDA
-    def __init__(self, o, channels, node_type=(DeformConv, DeformConv)):
-        super(IDAUpV3_bis, self).__init__()
-        self.up = nn.UpsamplingBilinear2d(scale_factor=2)  # no params
-
-        for i in range(0, len(channels)):
-            c = channels[i]
-            if i == 0:
-                node = node_type[1](c, o)
-            else:
-                node = node_type[1](c, c)
-            setattr(self, 'node_' + str(i), node)
-
-    def forward(self, layers, startp, endp):
-        for i in range(endp-1, startp, -1):
-            # print(f"layers[{i}] before:", layers[i].shape)
-            tmp = self.up(layers[i])  # ch 256-> 256
-            node = getattr(self, 'node_' + str(i))
-            layers[i-1] = node(tmp + layers[i - 1])
-        # layers[startp] = self.up(layers[startp])  # 256=>256
-        node = getattr(self, 'node_' + str(startp))
-        layers[startp] = node(layers[startp])
-        return layers # [layers[startp]]  #keeps multiscsales
 
 
 class ClipMatcher(SetCriterion):
@@ -199,7 +156,7 @@ class ClipMatcher(SetCriterion):
             gt_labels_target = gt_labels_target.to(src_logits)
             loss_ce = sigmoid_focal_loss(src_logits.flatten(1),
                                              gt_labels_target.flatten(1),
-                                             alpha=0.12,
+                                             alpha=0.25,
                                              gamma=2,
                                              num_boxes=num_boxes, mean_in_dim1=False)
             loss_ce = loss_ce.sum()
@@ -408,8 +365,8 @@ def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
-class MyMOTR(nn.Module):
-    def __init__(self, backbone, transformer, q_extractor, num_classes, num_queries, num_feature_levels, criterion, track_embed,
+class MOTR(nn.Module):
+    def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels, criterion, track_embed,
                  aux_loss=True, with_box_refine=False, two_stage=False, memory_bank=None, use_checkpoint=False, query_denoise=0):
         """ Initializes the model.
         Parameters:
@@ -426,7 +383,6 @@ class MyMOTR(nn.Module):
         self.num_queries = num_queries
         self.track_embed = track_embed
         self.transformer = transformer
-        self.q_extractor = q_extractor
         hidden_dim = transformer.d_model
         self.num_classes = num_classes
         self.class_embed = nn.Linear(hidden_dim, num_classes)
@@ -437,8 +393,6 @@ class MyMOTR(nn.Module):
         self.position = nn.Embedding(num_queries, 4)
         self.yolox_embed = nn.Embedding(1, hidden_dim)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
-        with torch.no_grad(): # detection queries are = (BMN + these_embeddings) 
-            self.query_embed.weight.copy_(torch.rand_like(self.query_embed.weight)*1e-4) # ideally ==0
         if query_denoise:
             self.refine_embed = nn.Embedding(1, hidden_dim)
         if num_feature_levels > 1:
@@ -467,8 +421,6 @@ class MyMOTR(nn.Module):
         self.aux_loss = aux_loss
         self.with_box_refine = with_box_refine
         self.two_stage = two_stage
-
-        self.idaup = IDAUpV3_bis(256, [256 for _ in range(num_feature_levels)])
 
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
@@ -542,7 +494,7 @@ class MyMOTR(nn.Module):
         return [{'pred_logits': a, 'pred_boxes': b, }
                 for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
 
-    def _forward_single_image(self, samples, track_instances: Instances, gtboxes=None, exemplar=None):
+    def _forward_single_image(self, samples, track_instances: Instances, gtboxes=None):
         features, pos = self.backbone(samples)
         src, mask = features[-1].decompose()
         assert mask is not None
@@ -555,52 +507,19 @@ class MyMOTR(nn.Module):
             masks.append(mask)
             assert mask is not None
 
-        if isinstance(exemplar, torch.Tensor):
-            exemplar = nested_tensor_from_tensor_list([exemplar])
-        elif isinstance(exemplar, list):
-            exemplar = NestedTensor(*exemplar)
-
-        ## BMN PART
-        exemplar,_ = self.backbone(exemplar)
-        exemplar, _ = features[-1].decompose()
-        exemplar = self.input_proj[len(features)-1](exemplar)
-        srcs[-1], queries, proposed_q = self.q_extractor(srcs[-1], exemplar)
-
-        ## UPSCALE PART
-        srcs = self.idaup(srcs, 0, len(srcs))
-
         if self.num_feature_levels > len(srcs):
             _len_srcs = len(srcs)
             for l in range(_len_srcs, self.num_feature_levels):
                 if l == _len_srcs:
-                    src = self.input_proj[l](features[-1].tensors)      # CNN downsampling2
+                    src = self.input_proj[l](features[-1].tensors)
                 else:
                     src = self.input_proj[l](srcs[-1])
                 m = samples.mask
                 mask = F.interpolate(m[None].float(), size=src.shape[-2:]).to(torch.bool)[0]
-                pos_l = self.backbone[1](NestedTensor(src, mask)).to(src.dtype) # gets position ?
+                pos_l = self.backbone[1](NestedTensor(src, mask)).to(src.dtype)
                 srcs.append(src)
                 masks.append(mask)
                 pos.append(pos_l)
-
-        # sums to detection queries the infos from the frames
-        # new_queries = queries.squeeze(0)
-
-        # new_queries = torch.cat([
-        #         queries.squeeze(0),           # detection queries
-        #         track_instances.query_pos,    # prev_frame / learned
-        #     ],dim=0
-        # )
-        idx = self.num_queries - (self.num_queries//5)
-        track_instances.query_pos[ idx:self.num_queries] = queries[0]   # override learned queries with ours
-
-        # new_ref_p = torch.cat([
-        #         # positions of queries in the images as (x,y)  :  (0,0)topleft  (1,1)bottomright
-        #         proposed_q[0][0] / torch.tensor([proposed_q[1]]).view(1,2).to(proposed_q[0].device),   # TODO: clean up;   trackqueries from None in this function
-        #         track_instances.ref_pts[:,:2],
-        #     ],dim=0
-        # )
-        track_instances.ref_pts[ idx:self.num_queries,:2] = proposed_q[0][0] / torch.tensor([proposed_q[1]]).view(1,2).to(proposed_q[0].device)
 
         if gtboxes is not None:
             n_dt = len(track_instances)
@@ -643,7 +562,7 @@ class MyMOTR(nn.Module):
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
         out['hs'] = hs[-1]
-        return out, proposed_q
+        return out
 
     def _post_process_single_image(self, frame_res, track_instances, is_last):
         if self.query_denoise > 0:
@@ -654,7 +573,7 @@ class MyMOTR(nn.Module):
             frame_res['pred_logits'] = frame_res['pred_logits'][:, :n_ins]
             frame_res['pred_boxes'] = frame_res['pred_boxes'][:, :n_ins]
             ps_outputs = [{'pred_logits': ps_logits, 'pred_boxes': ps_boxes}]
-            for aux_outputs in frame_res['aux_outputs']:                    ########TODO!! shouldn't this be inverted? depoends on how used in loss
+            for aux_outputs in frame_res['aux_outputs']:
                 ps_outputs.append({
                     'pred_logits': aux_outputs['pred_logits'][:, n_ins:],
                     'pred_boxes': aux_outputs['pred_boxes'][:, n_ins:],
@@ -670,7 +589,7 @@ class MyMOTR(nn.Module):
                 track_scores = frame_res['pred_logits'][0, :, 0].sigmoid()
 
         track_instances.scores = track_scores
-        track_instances.pred_logits = frame_res['pred_logits'][0]   # 0 because supports only batchsize = 1
+        track_instances.pred_logits = frame_res['pred_logits'][0]
         track_instances.pred_boxes = frame_res['pred_boxes'][0]
         track_instances.output_embedding = frame_res['hs'][0]
         if self.training:
@@ -697,14 +616,12 @@ class MyMOTR(nn.Module):
             img = nested_tensor_from_tensor_list(img)
         if track_instances is None:
             track_instances = self._generate_empty_tracks(proposals)
-            # TODO:   generate from query if code will be moved
-        # else:
-        #     track_instances = Instances.cat([
-        #         self._generate_empty_tracks(proposals),
-        #         track_instances])
+        else:
+            track_instances = Instances.cat([
+                self._generate_empty_tracks(proposals),
+                track_instances])
         res = self._forward_single_image(img,
-                                         track_instances=track_instances,
-                                         exemplar=exemplar)
+                                         track_instances=track_instances)
         res = self._post_process_single_image(res, track_instances, False)
 
         track_instances = res['track_instances']
@@ -722,14 +639,14 @@ class MyMOTR(nn.Module):
         if self.training:
             self.criterion.initialize_for_single_clip(data['gt_instances'])
         frames = data['imgs']  # list of Tensor.
-        exemplar = data['patches'] if 'patches' in data else None
         outputs = {
             'pred_logits': [],
             'pred_boxes': [],
         }
+        data['proposals'] = torch.zeros(len(frames),0,5, device=frames[0].device)
         track_instances = None
         keys = list(self._generate_empty_tracks()._fields.keys())
-        for frame_index, (frame, gt, proposals) in enumerate(zip(frames, data['gt_instances'], data['proposals'])):
+        for frame_index, (frame, gt, proposals) in enumerate(zip(frames, data['gt_instances'], data['proposals'])): 
             frame.requires_grad = False
             is_last = frame_index == len(frames) - 1
 
@@ -745,43 +662,39 @@ class MyMOTR(nn.Module):
             if track_instances is None:
                 track_instances = self._generate_empty_tracks(proposals)
             else:
-                # should work TODO with this commented --->  check how instances_len(changes through time)
                 track_instances = Instances.cat([
                     self._generate_empty_tracks(proposals),
                     track_instances])
 
-            if self.use_checkpoint and frame_index < len(frames) - 1:    # what does this do??
-                def fn(frame, gtboxes, *args):                                      # could take exemplar as input and pass it in   args = [frame, gtboxes, EXEMPLAR] + [track_in....
-                    frame = nested_tensor_from_tensor_list([frame])      
+            if self.use_checkpoint and frame_index < len(frames) - 1:
+                def fn(frame, gtboxes, *args):
+                    frame = nested_tensor_from_tensor_list([frame])
                     tmp = Instances((1, 1), **dict(zip(keys, args)))
-                    frame_res, proposed_q = self._forward_single_image(frame, tmp, gtboxes, exemplar) # tmp is made from [track_instances.get(k) for k in keys]
+                    frame_res = self._forward_single_image(frame, tmp, gtboxes)
                     return (
                         frame_res['pred_logits'],
                         frame_res['pred_boxes'],
                         frame_res['hs'],
                         *[aux['pred_logits'] for aux in frame_res['aux_outputs']],
                         *[aux['pred_boxes'] for aux in frame_res['aux_outputs']]
-                    ), proposed_q
+                    )
 
                 args = [frame, gtboxes] + [track_instances.get(k) for k in keys]
                 params = tuple((p for p in self.parameters() if p.requires_grad))
-                tmp, proposed_q = checkpoint.CheckpointFunction.apply(fn, len(args), *args, *params)
+                tmp = checkpoint.CheckpointFunction.apply(fn, len(args), *args, *params)
                 frame_res = {
                     'pred_logits': tmp[0],
                     'pred_boxes': tmp[1],
                     'hs': tmp[2],
                     'aux_outputs': [{
                         'pred_logits': tmp[3+i],
-                        'pred_boxes': tmp[3+5+i],  # 5 if num transformer_layer_decoders = 6
+                        'pred_boxes': tmp[3+5+i],
                     } for i in range(5)],
                 }
             else:
                 frame = nested_tensor_from_tensor_list([frame])
-                frame_res, proposed_q = self._forward_single_image(frame, track_instances, gtboxes, exemplar)
-
+                frame_res = self._forward_single_image(frame, track_instances, gtboxes)
             frame_res = self._post_process_single_image(frame_res, track_instances, False) #is_last)
-
-            proposed_q, (H,W) = proposed_q
 
             track_instances = frame_res['track_instances']
             outputs['pred_logits'].append(frame_res['pred_logits'])
@@ -791,10 +704,7 @@ class MyMOTR(nn.Module):
                 import cv2
                 dt_instances = self.post_process(track_instances, data['imgs'][0].shape[-2:])
 
-                proposed_q = proposed_q.cpu() * torch.tensor([data['imgs'][0].shape[1]/H, data['imgs'][0].shape[2]/W]).view(1,1,2)
-                proposed_q = proposed_q.int()
-
-                keep = dt_instances.scores > .004
+                keep = dt_instances.scores > .02
                 keep &= dt_instances.obj_idxes >= 0
                 dt_instances = dt_instances[keep]
 
@@ -813,17 +723,13 @@ class MyMOTR(nn.Module):
                     img = data['imgs'][frame_index].clone().cpu().permute(1,2,0).numpy()[:,:,::-1]
                     for xyxy, track_id in zip(bbox_xyxy, identities):
                         if track_id < 0 or track_id is None:
-                            pass #continue
+                            continue
                         x1, y1, x2, y2 = [int(a) for a in xyxy]
                         color = tuple([(((5+track_id*3)*4909 % p)%256) /110 for p in (3001, 1109, 2027)])
 
                         tmp = img[ y1:y2, x1:x2].copy()
                         img[y1-3:y2+3, x1-3:x2+3] = color
                         img[y1:y2, x1:x2] = tmp
-
-                    for p in proposed_q[0]:
-                        img[p[0]:p[0]+3, p[1]:p[1]+3] = (0,2.2,0)
-                
                     cv2.imshow('preds', img/4+.4)
                     cv2.waitKey()
 
@@ -832,16 +738,6 @@ class MyMOTR(nn.Module):
         if self.training:
             outputs['losses_dict'] = self.criterion.losses_dict
         return outputs
-
-
-
-def build_decoder(args):
-    decoder_layer = DeformableTransformerDecoderLayer(args.hidden_dim, args.dim_feedforward,
-                                                        0.1, 'relu',
-                                                        args.num_feature_levels, 8, 4, not args.decoder_cross_self,
-                                                        sigmoid_attn=args.sigmoid_attn, extra_track_attn=args.extra_track_attn,
-                                                        memory_bank=args.memory_bank_type == 'MemoryBankFeat')
-    return DeformableTransformerDecoder(decoder_layer, args.dec_layers, True)
 
 
 def build(args):
@@ -860,7 +756,7 @@ def build(args):
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
-    q_extractor = ImgExemplarSelfAttn(args.hidden_dim, args.num_queries)
+
     transformer = build_deforamble_transformer(args)
     d_model = transformer.d_model
     hidden_dim = args.dim_feedforward
@@ -888,22 +784,23 @@ def build(args):
                                     'frame_{}_ps{}_loss_bbox'.format(i, j): args.bbox_loss_coef,
                                     'frame_{}_ps{}_loss_giou'.format(i, j): args.giou_loss_coef,
                                     })
+    memory_bank = None
     losses = ['labels', 'boxes']
-    criterion = ClipMatcher(1, matcher=img_matcher, weight_dict=weight_dict, losses=losses)
+    criterion = ClipMatcher(num_classes, matcher=img_matcher, weight_dict=weight_dict, losses=losses)
     criterion.to(device)
     postprocessors = {}
-    model = MyMOTR(
+    model = MOTR(
         backbone,
         transformer,
-        q_extractor,
         track_embed=query_interaction_layer,
         num_feature_levels=args.num_feature_levels,
-        num_classes=1,
+        num_classes=num_classes,
         num_queries=args.num_queries,
         aux_loss=args.aux_loss,
         criterion=criterion,
         with_box_refine=args.with_box_refine,
         two_stage=args.two_stage,
+        memory_bank=memory_bank,
         use_checkpoint=args.use_checkpoint,
         query_denoise=args.query_denoise,
     )

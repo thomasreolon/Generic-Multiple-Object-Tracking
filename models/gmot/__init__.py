@@ -593,8 +593,8 @@ class MyMOTR(nn.Module):
         #         track_instances.query_pos,    # prev_frame / learned
         #     ],dim=0
         # )
-        idx = self.num_queries - (self.num_queries//5)
-        track_instances.query_pos[ idx:self.num_queries] = queries[0]   # override learned queries with ours
+        # idx = self.num_queries - (self.num_queries//5)
+        track_instances.query_pos[ :self.num_queries] = queries[0]   # override learned queries with ours
 
         # new_ref_p = torch.cat([
         #         # positions of queries in the images as (x,y)  :  (0,0)topleft  (1,1)bottomright
@@ -602,7 +602,7 @@ class MyMOTR(nn.Module):
         #         track_instances.ref_pts[:,:2],
         #     ],dim=0
         # )
-        track_instances.ref_pts[ idx:self.num_queries,:2] = proposed_q[0][0] / torch.tensor([proposed_q[1]]).view(1,2).to(proposed_q[0].device)
+        track_instances.ref_pts[ :self.num_queries,:2] = proposed_q[0][0] / torch.tensor([proposed_q[1]]).view(1,2).to(proposed_q[0].device)
 
         if gtboxes is not None:
             n_dt = len(track_instances)

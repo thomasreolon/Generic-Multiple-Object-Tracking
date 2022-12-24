@@ -47,8 +47,8 @@ class QueryExtractor(nn.Module):
         self.extractor = PixelExtractor()
         self.similarity = nn.Parameter(torch.eye(emb_size), requires_grad=True)
         self.attnpooling = nn.ParameterList([
-            nn.Parameter(torch.ones(2*(i+1))/(2*(i+1)), requires_grad=True)
-            for i in range(n_flvl)
+            nn.Parameter(torch.ones(2*i)/(2*i), requires_grad=True)
+            for i in range(n_flvl,0,-1)
         ])
         self.up = nn.UpsamplingBilinear2d(scale_factor=2)
         self.proposer =nn.Sequential(
@@ -88,21 +88,28 @@ class QueryExtractor(nn.Module):
 
         interest = self.proposer(similarities_maps)
 
-        return self.get_locations(interest, img_feat[0].shape[-2:]), interest
+        return self.get_locations(interest, *img_feat[0].shape[-2:]), interest
 
     @torch.no_grad()
     def get_locations(self, interest, H,W):
         # NMS in interest
-        good_pixels1 = None
+        good_pixels1 = torch.zeros_like(interest).bool()
+        c1 = interest[:, :-1] >= interest[:, 1:]  # bigger than up
+        c2 = interest[:, 1:] > interest[:, :-1]  # bigger than down
+        c3 = interest[:, :,:-1] >= interest[:, :,1:]  # bigger than left
+        c4 = interest[:, :,1:] > interest[:, :,:-1]  # bigger than right
+        good_pixels1[:, 1:-1, 1:-1] = c1[:, 1:, 1:-1] & c2[:, :-1, 1:-1] & c3[:, 1:-1, 1:] & c4[:, 1:-1, :-1]
 
         # thresholding
         good_pixels2 = interest[:,0] > 0.6
 
+        if not (good_pixels1 & good_pixels2).any(): return torch.zeros((0,4), device=interest.device)
         # getting indices
-        good_pixels = (good_pixels1 & good_pixels2).nonzero(as_tuple=True)  
-        bb = interest[good_pixels].sigmoid()    [0]  # N, 2   TODO: [0] imposes to use BS=1
+        good_pixels = (good_pixels1 & good_pixels2).nonzero(as_tuple=True)
+        bb = (interest[good_pixels].sigmoid() +1)/4   [0]  # N, 2   TODO: [0] imposes to use BS=1
         yx = torch.stack(good_pixels[-2:], dim=1).float()  # N, 2 #TODO: crashes if BS>1
         yx = yx / torch.tensor([H,W],device=yx.device).view(1,1,2)
+        bb,_ = torch.min(torch.stack((yx,bb)), dim=0)
         return torch.cat((yx,bb),dim=2)  # Nx4
 
     def get_queries(self, srcs, ref_pts):
@@ -116,4 +123,4 @@ class QueryExtractor(nn.Module):
                 lvl_q.append(src[0,:,y,x])
             queries.append(torch.stack(lvl_q))
         queries = torch.stack(queries, dim=2) @ self.lvl_importance / self.lvl_importance.sum()
-        
+        return queries.squeeze(-1)

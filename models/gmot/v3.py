@@ -27,11 +27,11 @@ from models.structures import Instances, Boxes, pairwise_iou, matched_boxlist_io
 
 from ..backbone import build_backbone
 from ..matcher import build_matcher
-from ..deformable_transformer_plus import build_deforamble_transformer, pos2posemb
+from .decoder.deformable1 import build_deforamble_transformer, pos2posemb
 from ..qim import build as build_query_interaction_layer
 from ..deformable_detr import SetCriterion, MLP, sigmoid_focal_loss
 
-from .exemplar.bmnlike import ImgExemplarSelfAttn
+from .exemplar.q_proposer import QueryExtractor
 
 class DeformConv(nn.Module):
     def __init__(self, chi, cho):
@@ -562,45 +562,45 @@ class MyMOTR(nn.Module):
         elif isinstance(exemplar, list):
             exemplar = NestedTensor(*exemplar)
 
-        ## BMN PART
-        exemplar,_ = self.backbone(exemplar)
-        exemplar, _ = features[-1].decompose()
-        exemplar = self.input_proj[len(features)-1](exemplar)
-        srcs[-1], queries, proposed_q = self.q_extractor(srcs[-1], exemplar[:,:-1])
-
-        ## UPSCALE PART
-        srcs = self.idaup(srcs, 0, len(srcs))
+        ## ExemplarFeatures
+        if isinstance(exemplar, torch.Tensor):
+            exemplar = nested_tensor_from_tensor_list([exemplar])
+        elif isinstance(exemplar, list):
+            exemplar = NestedTensor(*exemplar)
+        e_features,_ = self.backbone(exemplar)
+        esrcs = []
+        for l, feat in enumerate(e_features):
+            src, _ = feat.decompose()
+            esrcs.append(self.input_proj[l](src)) 
 
         if self.num_feature_levels > len(srcs):
             _len_srcs = len(srcs)
             for l in range(_len_srcs, self.num_feature_levels):
                 if l == _len_srcs:
-                    src = self.input_proj[l](features[-1].tensors)      # CNN downsampling2
+                    src = self.input_proj[l](features[-1].tensors)
+                    esrc = self.input_proj[l](e_features[-1].tensors)
                 else:
                     src = self.input_proj[l](srcs[-1])
+                    esrc = self.input_proj[l](esrcs[-1])
                 m = samples.mask
                 mask = F.interpolate(m[None].float(), size=src.shape[-2:]).to(torch.bool)[0]
-                pos_l = self.backbone[1](NestedTensor(src, mask)).to(src.dtype) # gets position ?
+                pos_l = self.backbone[1](NestedTensor(src, mask)).to(src.dtype)
                 srcs.append(src)
+                esrcs.append(esrc)
                 masks.append(mask)
                 pos.append(pos_l)
-
-        idx = self.num_queries - (self.num_queries//5)
-        track_instances.query_pos[ idx:self.num_queries] = queries[0]   # override learned queries with ours
-
-        track_instances.ref_pts[ idx:self.num_queries,:2] = proposed_q[0][0] / torch.tensor([proposed_q[1]]).view(1,2).to(proposed_q[0].device)
+        
+        q_pos, _  = self.q_extractor(srcs, esrcs)
 
         if gtboxes is not None:
-            n_dt = len(track_instances)
-            ps_tgt = self.refine_embed.weight.expand(gtboxes.size(0), -1)
-            query_embed = torch.cat([track_instances.query_pos, ps_tgt])
-            ref_pts = torch.cat([track_instances.ref_pts, gtboxes])
-            attn_mask = torch.zeros((len(ref_pts), len(ref_pts)), dtype=bool, device=ref_pts.device)
+            ref_pts = torch.cat([q_pos, gtboxes])
+            n_dt = q_pos.shape[1]
             attn_mask[:n_dt, n_dt:] = True
         else:
-            query_embed = track_instances.query_pos
-            ref_pts = track_instances.ref_pts
+            ref_pts = q_pos
             attn_mask = None
+
+        query_embed = self.q_extractor.get_queries(srcs, ref_pts)
 
         hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact = \
             self.transformer(srcs, masks, pos, query_embed, ref_pts=ref_pts,
@@ -719,7 +719,6 @@ class MyMOTR(nn.Module):
         keys = list(self._generate_empty_tracks()._fields.keys())
         for frame_index, (frame, gt, proposals) in enumerate(zip(frames, data['gt_instances'], data['proposals'])):
             frame.requires_grad = False
-            is_last = frame_index == len(frames) - 1
 
             if self.query_denoise > 0:
                 l_1 = l_2 = self.query_denoise
@@ -838,7 +837,7 @@ def build(args):
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
-    q_extractor = ImgExemplarSelfAttn(args.hidden_dim-1, args.num_queries)
+    q_extractor = QueryExtractor(args.hidden_dim, args.num_queries,args.num_feature_levels)
     transformer = build_deforamble_transformer(args)
     d_model = transformer.d_model
     hidden_dim = args.dim_feedforward

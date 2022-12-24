@@ -59,6 +59,8 @@ class QueryExtractor(nn.Module):
             nn.ReLU(),
             nn.Conv2d(n_flvl*2,3, kernel_size=1),
         )
+
+        self.lvl_importance = nn.Parameter(torch.ones(n_flvl, 1), requires_grad=True)
         
     
     def forward(self, img_feat, exe_feat, mask=None):
@@ -98,7 +100,20 @@ class QueryExtractor(nn.Module):
 
         # getting indices
         good_pixels = (good_pixels1 & good_pixels2).nonzero(as_tuple=True)  
-        bb = interest[good_pixels]  # B, N, 2
-        yx = torch.stack(good_pixels[-2:], dim=1).unsqueeze(0).float()  # 1, N, 2 #TODO: crashes if BS>1
+        bb = interest[good_pixels].sigmoid()    [0]  # N, 2   TODO: [0] imposes to use BS=1
+        yx = torch.stack(good_pixels[-2:], dim=1).float()  # N, 2 #TODO: crashes if BS>1
         yx = yx / torch.tensor([H,W],device=yx.device).view(1,1,2)
-        return torch.cat((yx,bb),dim=2)
+        return torch.cat((yx,bb),dim=2)  # Nx4
+
+    def get_queries(self, srcs, ref_pts):
+        """not in the forward cause you could further process srcs between the 2 methods"""
+        queries = []
+        for src in srcs:
+            lvl_q = []
+            B,C,H,W = src.shape
+            for pt in ref_pts:
+                y,x = int(pt[0]*H), int(pt[1]*W)
+                lvl_q.append(src[0,:,y,x])
+            queries.append(torch.stack(lvl_q))
+        queries = torch.stack(queries, dim=2) @ self.lvl_importance / self.lvl_importance.sum()
+        

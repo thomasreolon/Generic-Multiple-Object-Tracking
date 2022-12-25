@@ -355,7 +355,6 @@ class DeformableTransformerDecoderLayer(nn.Module):
         # self attention
         tgt = self._forward_self_attn(tgt, query_pos, attn_mask)
         # cross attention
-        # print('bREFERENCE POINTS', reference_points)
 
         tgt2 = self.cross_attn(self.with_pos_embed(tgt, query_pos),
                                reference_points,

@@ -8,8 +8,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 # ------------------------------------------------------------------------
 
-
-
 import argparse
 import datetime
 import random
@@ -26,8 +24,6 @@ import datasets.samplers as samplers
 from datasets import build_dataset
 from engine import train_one_epoch_mot
 from models import build_model
-
-
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Deformable DETR Detector', add_help=False)

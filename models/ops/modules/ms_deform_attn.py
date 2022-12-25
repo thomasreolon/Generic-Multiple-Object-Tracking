@@ -49,6 +49,7 @@ class MSDeformAttn(nn.Module):
                           "which is more efficient in our CUDA implementation.")
 
         self.im2col_step = 64
+        self.proj_min = 4
         self.sigmoid_attn = sigmoid_attn
 
         self.d_model = d_model
@@ -57,8 +58,8 @@ class MSDeformAttn(nn.Module):
         self.n_points = n_points
 
         self.sampling_offsets = nn.Linear(d_model, n_heads * n_levels * n_points * 2)
-        self.attention_weights = nn.Linear(d_model, n_heads * n_levels * n_points * 16)
-        self.query_proj = nn.Linear(d_model, 16)
+        self.attention_weights = nn.Linear(d_model, n_heads * n_levels * n_points * self.proj_min) # query proj
+        self.keys_proj = nn.Linear(d_model, self.proj_min)
         self.value_proj = nn.Linear(d_model, d_model)
         self.output_proj = nn.Linear(d_model, d_model)
 
@@ -115,9 +116,10 @@ class MSDeformAttn(nn.Module):
 
         # attention
         keys = self.get_keys(sampling_locations, input_flatten, input_spatial_shapes, input_level_start_index).view(
-            N*Len_q*self.n_heads*self.n_levels*self.n_points, 16, 1
+            N*Len_q*self.n_heads*self.n_levels*self.n_points, self.d_model
         )
-        attention_weights = self.attention_weights(query).view(N*Len_q*self.n_heads*self.n_levels*self.n_points, 1, 16)
+        keys = self.keys_proj(keys).unsqueeze(-1)
+        attention_weights = self.attention_weights(query).view(N*Len_q*self.n_heads*self.n_levels*self.n_points, 1, self.proj_min)
         attention_weights = (attention_weights @ keys).view(N, Len_q, self.n_heads, self.n_levels*self.n_points)
         attention_weights = F.softmax(attention_weights, -1).view(N, Len_q, self.n_heads, self.n_levels, self.n_points)
 
@@ -126,21 +128,18 @@ class MSDeformAttn(nn.Module):
         output = self.output_proj(output)
         return output
 
-    def get_keys(self, sampling_locations, input_flatten, input_spatial_shapes, input_level_start_index):
+    def get_keys(self, sampling_locations, input_flatten, iss, input_level_start_index):
         keys = []
-        for batch in sampling_locations:
-            for query in batch:
-                for head in query:
-                    for l, level in enumerate(head):
-                        for p in level:
-                            H,W = input_spatial_shapes[l]
-                            h,w = int(H*p[0]), int(W*p[1])
-                            index = w+h*W + input_level_start_index[l]
-                            keys.append( input_flatten[index] )
-        return torch.stack(keys)
+        # N   Len_q   n_heads   n_levels   n_points
+        sampling_locations = torch.clamp(sampling_locations, min=0, max=0.999)
 
+        idx = (sampling_locations*iss.view(1,1,1,-1,1,2)).int()
+        idx[:,:,:,:,:,0] *= iss[:,0].view(1,1,1,-1,1)
+        idx = idx.sum(dim=-1) + input_level_start_index.view(1,1,1,-1,1)
 
+        keys = input_flatten[0, idx.view(-1), :] # BS=1
 
+        return keys
 
 
 class MSDeformAttnOld(nn.Module):

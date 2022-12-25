@@ -331,4 +331,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+    if args.resume:
+        tmp = args.resume
+        tmp2 = args.fscd_path
+        args = torch.load(args.resume, map_location='cpu')['args']
+        args.resume = tmp
+        args.fscd_path = tmp2
     main(args)

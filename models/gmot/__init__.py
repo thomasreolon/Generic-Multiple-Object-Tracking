@@ -789,7 +789,7 @@ class MyMOTR(nn.Module):
             outputs['pred_logits'].append(frame_res['pred_logits'])
             outputs['pred_boxes'].append(frame_res['pred_boxes'])
 
-            if False:     # if true will show detections for each image (debugging)
+            if True:     # if true will show detections for each image (debugging)
                 import cv2
                 dt_instances = self.post_process(track_instances, data['imgs'][0].shape[-2:])
 

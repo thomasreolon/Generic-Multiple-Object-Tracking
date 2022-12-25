@@ -10,6 +10,7 @@
 from .motr import build as build_motr
 from .gmot import build as build_gmot
 from .gmot.v2 import build as build_gmot2
+from .gmot.v3 import build as build_gmot3
 
 
 def build_model(args):
@@ -17,6 +18,7 @@ def build_model(args):
         'motr': build_motr,
         'gmot': build_gmot,
         'gmot2': build_gmot2,
+        'gmot3': build_gmot3,
     }
     assert args.meta_arch in arch_catalog, 'invalid arch: {}'.format(args.meta_arch)
     build_func = arch_catalog[args.meta_arch]

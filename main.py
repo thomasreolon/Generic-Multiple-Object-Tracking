@@ -334,4 +334,6 @@ if __name__ == '__main__':
         args = torch.load(args.resume, map_location='cpu')['args']
         args.resume = tmp
         args.fscd_path = tmp2
+        args.epochs = 90
+        args.pretrained = None
     main(args)

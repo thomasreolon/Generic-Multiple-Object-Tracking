@@ -9,7 +9,7 @@
 
 from .motr import build as build_motr
 from .gmot import build as build_gmot
-from .gmot.v2 import build as build_gmot2
+from .gmot.v_da2 import build as build_gmot2
 from .gmot.v3 import build as build_gmot3
 
 

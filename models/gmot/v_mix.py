@@ -1,13 +1,3 @@
-# ------------------------------------------------------------------------
-# Copyright (c) 2022 megvii-research. All Rights Reserved.
-# ------------------------------------------------------------------------
-# Modified from Deformable DETR (https://github.com/fundamentalvision/Deformable-DETR)
-# Copyright (c) 2020 SenseTime. All Rights Reserved.
-# ------------------------------------------------------------------------
-# Modified from DETR (https://github.com/facebookresearch/detr)
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ------------------------------------------------------------------------
-
 """
 DETR model and criterion classes.
 """
@@ -585,8 +575,10 @@ class MyMOTR(nn.Module):
                 masks.append(mask)
                 pos.append(pos_l)
 
-        track_instances.query_pos[ :self.num_queries] = queries[0]   # override learned queries with ours
-        track_instances.ref_pts[ :self.num_queries,:2] = proposed_q[0][0] / torch.tensor([proposed_q[1]]).view(1,2).to(proposed_q[0].device)
+        idx = self.num_queries - (self.num_queries//5)
+        track_instances.query_pos[ idx:self.num_queries] = queries[0]   # override learned queries with ours
+
+        track_instances.ref_pts[ idx:self.num_queries,:2] = proposed_q[0][0] / torch.tensor([proposed_q[1]]).view(1,2).to(proposed_q[0].device)
 
         if gtboxes is not None:
             n_dt = len(track_instances)
@@ -640,7 +632,7 @@ class MyMOTR(nn.Module):
             frame_res['pred_logits'] = frame_res['pred_logits'][:, :n_ins]
             frame_res['pred_boxes'] = frame_res['pred_boxes'][:, :n_ins]
             ps_outputs = [{'pred_logits': ps_logits, 'pred_boxes': ps_boxes}]
-            for aux_outputs in frame_res['aux_outputs']:   
+            for aux_outputs in frame_res['aux_outputs']:                    ########TODO!! shouldn't this be inverted? depoends on how used in loss
                 ps_outputs.append({
                     'pred_logits': aux_outputs['pred_logits'][:, n_ins:],
                     'pred_boxes': aux_outputs['pred_boxes'][:, n_ins:],
@@ -716,7 +708,6 @@ class MyMOTR(nn.Module):
         keys = list(self._generate_empty_tracks()._fields.keys())
         for frame_index, (frame, gt, proposals) in enumerate(zip(frames, data['gt_instances'], data['proposals'])):
             frame.requires_grad = False
-            is_last = frame_index == len(frames) - 1
 
             if self.query_denoise > 0:
                 l_1 = l_2 = self.query_denoise

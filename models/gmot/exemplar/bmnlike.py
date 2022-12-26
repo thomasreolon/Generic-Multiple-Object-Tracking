@@ -19,7 +19,7 @@ class ImgExemplarSelfAttn(nn.Module):
         )
 
     
-    def forward(self, img_feat, exe_feat, mask=None):
+    def forward(self, img_feat, exe_feat, mask=None, num_q=None):
         """ 
         - img_feat: BxCxHxW
         - exe_feat: BxC
@@ -30,6 +30,7 @@ class ImgExemplarSelfAttn(nn.Module):
         # unroll image
         B,C,H,W = img_feat.shape
         unrolled = img_feat.view(B,C,H*W)              #  BxCxHW
+        num_q = num_q or self.num_queries
 
 
         #TODO: add pooling if exefeat is BChw
@@ -44,7 +45,7 @@ class ImgExemplarSelfAttn(nn.Module):
         hm = attn_matrix[:,:,-1].view(B,1,H,W)
 
         # select best pixels for queries
-        q_ids, tmp = self.get_queries(attn_matrix, img_feat.shape)
+        q_ids, tmp = self.get_queries(attn_matrix, img_feat.shape, num_q)
 
 
         if mask is not None:
@@ -72,7 +73,7 @@ class ImgExemplarSelfAttn(nn.Module):
         return img_feat, self.q_after(queries), tmp
 
     @torch.no_grad() 
-    def get_queries(self, attn_matrix, shapes):
+    def get_queries(self, attn_matrix, shapes, num_q):
         B,_,H,W = shapes
 
         # similarity between each pixel and the exemplar
@@ -90,7 +91,7 @@ class ImgExemplarSelfAttn(nn.Module):
         simil[~max_] -= 1e9
 
 
-        _, q_ids = simil.view(B,H*W).topk(self.num_queries//5)
+        _, q_ids = simil.view(B,H*W).topk(num_q)
 
         hcoord = (q_ids // W).unsqueeze(2)
         wcoord = (q_ids % W).unsqueeze(2)

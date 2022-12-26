@@ -738,8 +738,8 @@ class MOTR(nn.Module):
                     'hs': tmp[2],
                     'aux_outputs': [{
                         'pred_logits': tmp[3+i],
-                        'pred_boxes': tmp[3+5+i],
-                    } for i in range(5)],
+                        'pred_boxes': tmp[3+3+i],
+                    } for i in range(3)],
                 }
             else:
                 frame = nested_tensor_from_tensor_list([frame])
@@ -750,7 +750,7 @@ class MOTR(nn.Module):
             outputs['pred_logits'].append(frame_res['pred_logits'])
             outputs['pred_boxes'].append(frame_res['pred_boxes'])
 
-            if False:     # if true will show detections for each image (debugging)
+            if True:     # if true will show detections for each image (debugging)
                 import cv2
                 dt_instances = self.post_process(track_instances, data['imgs'][0].shape[-2:])
 

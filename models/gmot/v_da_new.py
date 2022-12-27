@@ -671,7 +671,7 @@ class MOTR(nn.Module):
             track_instances = Instances.cat([
                 self._generate_empty_tracks(proposals),
                 track_instances])
-        res = self._forward_single_image(img,
+        res = self._forward_single_image(img, exemplar=exemplar,
                                          track_instances=track_instances)
         res = self._post_process_single_image(res, track_instances, False)
 
@@ -756,7 +756,7 @@ class MOTR(nn.Module):
                 import cv2
                 dt_instances = self.post_process(track_instances, data['imgs'][0].shape[-2:])
 
-                keep = dt_instances.scores > .02
+                keep = dt_instances.scores > .0001
                 keep &= dt_instances.obj_idxes >= 0
                 dt_instances = dt_instances[keep]
 

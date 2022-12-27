@@ -107,6 +107,7 @@ class ClipMatcher(SetCriterion):
            targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
            The target boxes are expected in format (center_x, center_y, h, w), normalized by the image size.
         """
+        if outputs['pred_boxes'].shape[1]==0: return {}
         # We ignore the regression loss of the track-disappear slots.
         #TODO: Make this filter process more elegant.
         filtered_idx = []
@@ -531,6 +532,8 @@ class MOTR(nn.Module):
         src, mask = features[-1].decompose()
         assert mask is not None
 
+        if self.debug: gtboxes=None
+
         ## ImgFeatures
         srcs = []
         masks = []
@@ -671,7 +674,7 @@ class MOTR(nn.Module):
             track_instances = Instances.cat([
                 self._generate_empty_tracks(proposals),
                 track_instances])
-        res = self._forward_single_image(img,
+        res = self._forward_single_image(img, exemplar=exemplar,
                                          track_instances=track_instances)
         res = self._post_process_single_image(res, track_instances, False)
 
@@ -700,7 +703,6 @@ class MOTR(nn.Module):
         keys = list(self._generate_empty_tracks()._fields.keys())
         for frame_index, (frame, gt, proposals) in enumerate(zip(frames, data['gt_instances'], data['proposals'])): 
             frame.requires_grad = False
-            is_last = frame_index == len(frames) - 1
 
             if self.query_denoise > 0:
                 l_1 = l_2 = self.query_denoise

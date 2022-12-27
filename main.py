@@ -145,7 +145,7 @@ def get_args_parser():
 
     # end-to-end mot settings.
     parser.add_argument('--fscd_path', default='/home/intern/Desktop/datasets/FSCD147', type=str)
-    parser.add_argument('--mot_path', default='/home/intern/Desktop/datasets/GMOT', type=str)
+    parser.add_argument('--mot_path', default='/home/intern/Desktop/datasets', type=str)
     parser.add_argument('--det_db', default=[None, '/home/intern/Desktop/Generic-Multiple-Object-Tracking/data/det_db_motrv2.json'][0], type=str)
     parser.add_argument('--input_video', default='figs/demo.mp4', type=str)
     parser.add_argument('--data_txt_path_train',
@@ -330,13 +330,16 @@ if __name__ == '__main__':
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     if args.resume:
-        keys_arch = ['num_feature_levels', 'num_queries', 'dec_layers', 'with_box_refine', 'dec_n_points']
+        keys_arch = ['num_feature_levels','meta_arch', 'num_queries', 'dec_layers', 'with_box_refine', 'dec_n_points']
 
         tmp = torch.load(args.resume, map_location='cpu')['args']
 
         for k in keys_arch:
             args.__setattr__(k, tmp.__getattribute__(k))
-        args.epochs = 90
+        args.epochs = 9999
+        args.dataset_file ='e2e_gmot'
         args.pretrained = None
-        args.vis=False
+        args.vis=True
+        if args.dataset_file=='e2e_gmot':
+            args.sample_interval=1
     main(args)

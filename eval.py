@@ -16,7 +16,7 @@ from main import get_args_parser
 from models.structures import Instances
 from torch.utils.data import Dataset, DataLoader
 from datasets.fsc147 import build as build_dataset
-from util.misc import NestedTensor
+import numpy as np
 
 
 def main():
@@ -25,21 +25,22 @@ def main():
     args = get_args()
 
     # load model and weights
-    detr, _, _ = build_model(args)
+    mod_args = torch.load(args.resume, map_location='cpu')['args']
+    detr, _, _ = build_model(mod_args)
     detr.track_embed.score_thr = args.update_score_threshold
     detr.track_base = RuntimeTrackerBase(args.score_threshold, args.score_threshold, args.miss_tolerance)
     detr = load_model(detr, args.resume)
     detr.eval()
     detr = detr.to(args.device)
+    detr.debug=True
 
     # load dataset
-    dataset = load_svdataset(args.ds_eval, args.ds_split)
+    args.mot_path = '/home/intern/Desktop/datasets/GMOT/'
+    dataset = load_svdataset(args.ds_eval, args.ds_split, args)
 
     rank = int(os.environ.get('RLAUNCH_REPLICA', '0'))
     ws = int(os.environ.get('RLAUNCH_REPLICA_TOTAL', '1'))
     dataset = dataset[rank::ws]
-
-    args.mot_path = '/home/intern/Desktop/datasets/GMOT/GenericMOT_JPEG_Sequence/'
 
     det = Detector(args, detr, dataset)
 
@@ -49,7 +50,8 @@ def main():
 
 def get_args():
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
-    parser.add_argument('--score_threshold', default=0.5, type=float)
+    parser.add_argument('--score_threshold', default=0.3, type=float)
+    parser.add_argument('--ds_eval', default='e2e_fscd', type=str)
     parser.add_argument('--ds_split', default='test', type=str)
     parser.add_argument('--update_score_threshold', default=0.5, type=float)
     parser.add_argument('--miss_tolerance', default=20, type=int)
@@ -77,8 +79,9 @@ def load_gmot(split, args):
         # get 1st BB
         gt = args.mot_path+f'/track_label/{video}.txt'
         with open(gt, 'r') as fin:
-            line = fin.readline()
-            if line[0] == '0': break
+            for _ in range(300):
+                line = fin.readline()
+                if line[0] == '0': break
         line = [int(l) for l in line.split(',')]
         bb = line[2], line[3], line[2]+line[4], line[3]+line[5], 
 
@@ -100,7 +103,7 @@ def load_fscd(split, args):
         images = [img.clone().permute(1,2,0).numpy() for img in data['imgs']]
         exemplar = data['patches'][0]
 
-        list_dataset.append(None, images, exemplar)
+        list_dataset.append([None, images, exemplar])
     return list_dataset
 
 
@@ -110,6 +113,7 @@ class ListImgDataset(Dataset):
         self.base_path = base_path
         self.img_list = img_list
         self.exemplar = exemplar_bb
+        self.e = None
 
         '''
         common settings
@@ -125,14 +129,15 @@ class ListImgDataset(Dataset):
             bb = self.exemplar
             cur_img = cv2.imread(os.path.join(self.base_path, fpath_or_ndarray))
             cur_img = cv2.cvtColor(cur_img, cv2.COLOR_BGR2RGB)
-            exemplar = cur_img[bb[1]:bb[3], bb[0]:bb[2]]
-        elif isinstance(fpath_or_ndarray, ):
-            cur_img = fpath_or_ndarray
-            exemplar = self.exemplar
+            if self.e is None:
+                self.e = cur_img[bb[1]:bb[3], bb[0]:bb[2]]
+        else:
+            cur_img = np.array(fpath_or_ndarray)
             cur_img = cur_img/4*.4      # de normalize
-            exemplar = exemplar/4*.4
+            if self.e is None:
+                self.e = np.array(self.exemplar[0])/4.5*.45
         assert cur_img is not None
-        return cur_img, exemplar
+        return cur_img, self.e
 
     def init_img(self, img, exemplar):
         ori_img = img.copy()
@@ -144,7 +149,9 @@ class ListImgDataset(Dataset):
         target_w = int(self.seq_w * scale)
         img = cv2.resize(img, (target_w, target_h))
         img = F.normalize(F.to_tensor(img), self.mean, self.std)
-        exem_wh = int(exemplar.shape[1]*scale), int(exemplar.shape[0]*scale)
+        exem_wh = 1+int(exemplar.shape[1]*scale), 1+int(exemplar.shape[0]*scale)
+        if len(exemplar)==3: exemplar = np.transpose(exemplar, (1,2,0))
+        print(exemplar.shape, img.shape)
         exemplar = cv2.resize(exemplar, exem_wh)
         exemplar = F.normalize(F.to_tensor(exemplar), self.mean, self.std)
         return img, ori_img, exemplar
@@ -180,18 +187,26 @@ class Detector(object):
         total_dts = 0
         total_occlusion_dts = 0
 
+        for img, ori_img, exemplar in ListImgDataset(*self.dataset[video]):
+            img = img.squeeze(0).permute(1,2,0).numpy()
+            exemplar = exemplar.squeeze(0).permute(1,2,0).numpy()
+            cv2.imshow('img', img/4+.4)
+            cv2.imshow('exemplar', exemplar/4+.4)
+            cv2.imshow('ori_img', ori_img)
+            cv2.waitKey()
+
         
         loader = DataLoader(ListImgDataset(*self.dataset[video]), 1, num_workers=2)  
         lines = []
-        for i, data in enumerate(tqdm(loader)):
-            cur_img, ori_img, proposals = data[0][0], data[1][0], data[2]
-
-            proposals = NestedTensor(proposals[0][0], proposals[1][0])
-            cur_img, proposals = cur_img.to(self.args.device), proposals.to(self.args.device)
+        track_instances = None
+        for i, (img, ori_img, exemplar) in enumerate(tqdm(loader)):
+            img, exemplar = img.to(self.args.device), exemplar.to(self.args.device)
+            ori_img = ori_img.squeeze(0)
 
             seq_h, seq_w, _ = ori_img.shape
 
-            res = self.detr.inference_single_image(cur_img, (seq_h, seq_w), None, None, exemplar=proposals)  ####### track_instances is = None....   we arent'reusing queries from prev
+            exemplar = [exemplar[0], torch.zeros_like(exemplar[:,0])]
+            res = self.detr.inference_single_image([img[0]], (seq_h, seq_w), track_instances, None, exemplar=exemplar) 
             track_instances = res['track_instances']
 
             dt_instances = deepcopy(track_instances)
@@ -206,7 +221,7 @@ class Detector(object):
             identities = dt_instances.obj_idxes.tolist()
 
             save_format = '{frame},{id},{x1:.2f},{y1:.2f},{w:.2f},{h:.2f},1,-1,-1,-1\n'
-            img = cur_img.clone().cpu()[0].permute(1,2,0).numpy()[:,:,::-1]
+            ori_img = ori_img.numpy()
             for xyxy, track_id in zip(bbox_xyxy, identities):
                 if track_id < 0 or track_id is None:
                     continue
@@ -215,12 +230,14 @@ class Detector(object):
                 lines.append(save_format.format(frame=i + 1, id=track_id, x1=x1, y1=y1, w=w, h=h))
 
                 if vis:
+                    color = tuple([(((5+track_id*3)*4909 % p)%256) /256 for p in (3001, 1109, 2027)])
                     x1, y1, x2, y2 = [int(a*800/1080) for a in xyxy]
-                    tmp = img[ y1:y2, x1:x2].copy()
-                    img[y1-3:y2+3, x1-3:x2+3] = (0,2.3,0)
-                    img[y1:y2, x1:x2] = tmp
+                    tmp = ori_img[ y1:y2, x1:x2].copy()
+                    ori_img[y1-3:y2+3, x1-3:x2+3] = color
+                    ori_img[y1:y2, x1:x2] = tmp
             if vis:
-                cv2.imshow('preds', img/4+.4)
+                # ori_img = cv2.resize(ori_img, (600,350))
+                cv2.imshow('preds', ori_img)
                 cv2.waitKey(40)
             
 
@@ -229,7 +246,7 @@ class Detector(object):
         print("totally {} dts {} occlusion dts".format(total_dts, total_occlusion_dts))
 
 class RuntimeTrackerBase(object):
-    def __init__(self, score_thresh=0.6, filter_score_thresh=0.5, miss_tolerance=10):
+    def __init__(self, score_thresh=0.02, filter_score_thresh=0.5, miss_tolerance=10):
         self.score_thresh = score_thresh
         self.filter_score_thresh = filter_score_thresh
         self.miss_tolerance = miss_tolerance
@@ -255,6 +272,7 @@ class RuntimeTrackerBase(object):
 
 
 
-
+if __name__=='__main__':
+    main()
 
 

@@ -185,10 +185,8 @@ def make_transforms_for_mot17(image_set, args=None):
 def build_transform(args, image_set):
     if image_set == 'train':
         return make_transforms_for_mot17('train', args)
-    elif image_set == 'val':
-        return make_transforms_for_mot17('val', args)
     else:
-        raise NotImplementedError()
+        return make_transforms_for_mot17('val', args)
 
 
 def build(image_set, args):

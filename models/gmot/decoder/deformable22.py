@@ -110,14 +110,45 @@ class MSDeformAttn(nn.Module):
                 'Last dim of reference_points must be 2 or 4, but get {} instead.'.format(reference_points.shape[-1]))
 
         # attention
+        keys = self.get_keys(sampling_locations, input_flatten, input_spatial_shapes, input_level_start_index).view(
+            N*Len_q*self.n_heads*self.n_levels*self.n_points, self.d_model
+        )
+        keys = self.keys_proj(keys).unsqueeze(-1)
         attention_weights = self.attention_weights(query).view(N*Len_q*self.n_heads*self.n_levels*self.n_points, 1, self.proj_min)
-        attention_weights = (attention_weights).view(N, Len_q, self.n_heads, self.n_levels*self.n_points)
+        attention_weights = (attention_weights @ keys).view(N, Len_q, self.n_heads, self.n_levels*self.n_points)
         attention_weights = F.softmax(attention_weights, -1).view(N, Len_q, self.n_heads, self.n_levels, self.n_points)
 
         output = MSDeformAttnFunction.apply(
             value, input_spatial_shapes, input_level_start_index, sampling_locations, attention_weights, self.im2col_step)
         output = self.output_proj(output)
         return output
+
+    # def get_keys(self, sampling_locations, input_flatten, input_spatial_shapes, input_level_start_index):
+    #     keys = []
+    #     # N   Len_q   n_heads   n_levels   n_points
+    #     sampling_locations = torch.clamp(sampling_locations, min=0, max=0.999)
+    #     for b, batch in enumerate(sampling_locations):
+    #         for query in batch:
+    #             for head in query:
+    #                 for l, level in enumerate(head):
+    #                     for p in level:
+    #                         h,w = (input_spatial_shapes[l]*p).int()
+    #                         index = w+h*input_spatial_shapes[l][1] + input_level_start_index[l]
+    #                         keys.append( input_flatten[b, index] )
+    #     return torch.stack(keys)
+
+    def get_keys(self, sampling_locations, input_flatten, iss, input_level_start_index):
+        keys = []
+        # N   Len_q   n_heads   n_levels   n_points
+        sampling_locations = torch.clamp(sampling_locations, min=0, max=0.999)
+
+        idx = (sampling_locations*iss.view(1,1,1,-1,1,2)).int()
+        idx[:,:,:,:,:,0] *= iss[:,0].view(1,1,1,-1,1)
+        idx = idx.sum(dim=-1) + input_level_start_index.view(1,1,1,-1,1)
+
+        keys = input_flatten[0, idx.view(-1), :] # BS=1
+
+        return keys
 
 
 class DeformableTransformer(nn.Module):

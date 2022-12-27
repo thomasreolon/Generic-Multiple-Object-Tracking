@@ -28,7 +28,7 @@ from models.structures import Instances, Boxes, pairwise_iou, matched_boxlist_io
 
 from ..backbone import build_backbone
 from ..matcher import build_matcher
-from .decoder.deformable2 import build_deforamble_transformer, pos2posemb
+from .decoder.deformable22 import build_deforamble_transformer, pos2posemb
 from ..qim import build as build_query_interaction_layer
 from ..deformable_detr import SetCriterion, MLP, sigmoid_focal_loss
 
@@ -397,7 +397,7 @@ class PixelExtractor(nn.Module):
 
 class MOTR(nn.Module):
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels, criterion, track_embed,
-                 aux_loss=True, with_box_refine=False, two_stage=False, memory_bank=None, use_checkpoint=False, query_denoise=0):
+                 aux_loss=True, with_box_refine=False, two_stage=False, memory_bank=None, use_checkpoint=False, query_denoise=0, dec_layers=6):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -410,6 +410,7 @@ class MOTR(nn.Module):
             two_stage: two-stage Deformable DETR
         """
         super().__init__()
+        self.dec_layers = dec_layers
         self.num_queries = num_queries
         self.track_embed = track_embed
         self.transformer = transformer
@@ -584,7 +585,8 @@ class MOTR(nn.Module):
 
         hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact = \
             self.transformer(srcs, masks, pos, query_embed, ref_pts=ref_pts,
-                             mem_bank=track_instances.mem_bank, mem_bank_pad_mask=track_instances.mem_padding_mask, attn_mask=attn_mask, exemplarq=exemplar)
+                             mem_bank=track_instances.mem_bank, mem_bank_pad_mask=track_instances.mem_padding_mask, attn_mask=attn_mask, 
+                             exemplarq=exemplar)
 
         outputs_classes = []
         outputs_coords = []
@@ -738,8 +740,8 @@ class MOTR(nn.Module):
                     'hs': tmp[2],
                     'aux_outputs': [{
                         'pred_logits': tmp[3+i],
-                        'pred_boxes': tmp[3+3+i],
-                    } for i in range(3)],
+                        'pred_boxes': tmp[3+self.dec_layers-1+i],
+                    } for i in range(self.dec_layers-1)],
                 }
             else:
                 frame = nested_tensor_from_tensor_list([frame])
@@ -750,7 +752,7 @@ class MOTR(nn.Module):
             outputs['pred_logits'].append(frame_res['pred_logits'])
             outputs['pred_boxes'].append(frame_res['pred_boxes'])
 
-            if True:     # if true will show detections for each image (debugging)
+            if self.debug:     # if true will show detections for each image (debugging)
                 import cv2
                 dt_instances = self.post_process(track_instances, data['imgs'][0].shape[-2:])
 
@@ -853,5 +855,6 @@ def build(args):
         memory_bank=memory_bank,
         use_checkpoint=args.use_checkpoint,
         query_denoise=args.query_denoise,
-    )
+        dec_layers=args.dec_layers
+)
     return model, criterion, postprocessors

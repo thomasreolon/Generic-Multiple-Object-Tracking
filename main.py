@@ -196,6 +196,7 @@ def main(args):
 
     model, criterion, postprocessors = build_model(args)
     model.to(device)
+    model.debug = args.vis
 
     model_without_ddp = model
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -268,7 +269,7 @@ def main(args):
                 args.resume, map_location='cpu', check_hash=True)
         else:
             checkpoint = torch.load(args.resume, map_location='cpu')
-        missing_keys, unexpected_keys = model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
+        missing_keys, unexpected_keys = model_without_ddp.load_state_dict(checkpoint['model'], strict=True)
         unexpected_keys = [k for k in unexpected_keys if not (k.endswith('total_params') or k.endswith('total_ops'))]
         if len(missing_keys) > 0:
             print('Missing Keys: {}'.format(missing_keys))
@@ -329,11 +330,13 @@ if __name__ == '__main__':
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     if args.resume:
-        tmp = args.resume
-        tmp2 = args.fscd_path
-        args = torch.load(args.resume, map_location='cpu')['args']
-        args.resume = tmp
-        args.fscd_path = tmp2
+        keys_arch = ['num_feature_levels', 'num_queries', 'dec_layers', 'with_box_refine', 'dec_n_points']
+
+        tmp = torch.load(args.resume, map_location='cpu')['args']
+
+        for k in keys_arch:
+            args.__setattr__(k, tmp.__getattribute__(k))
         args.epochs = 90
         args.pretrained = None
+        args.vis=False
     main(args)
